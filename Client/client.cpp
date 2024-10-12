@@ -128,48 +128,42 @@ int main() {
                 std::cout << "Response from server: " << buffer << std::endl;
 
                 // Nhập số giây muốn quay video
-                std::string seconds;
-                std::cout << "Enter the number of seconds to record: ";
+                std::string seconds;         
                 std::getline(std::cin, seconds);
 
                 // Gửi số giây đến server
                 send(sock, seconds.c_str(), seconds.size() + 1, 0);
                 // Nhận kích thước file video từ server
                 size_t fileSize;
-                int video_length = recv(sock, (char*)&fileSize, sizeof(fileSize), 0);
-                if (video_length == sizeof(fileSize)) {
-
-                    // Nhận file video
+                int bytes_received = recv(sock, (char*)&fileSize, sizeof(fileSize), 0);
+                if (bytes_received != sizeof(fileSize)) {
+                    std::cout << "Failed to receive file size." << std::endl;
+                }
+                else {
+                    // Nhận file video trong một lần duy nhất
                     char* videoBuffer = new char[fileSize];
-                    size_t total_bytes_received = 0;
+                    bytes_received = recv(sock, videoBuffer, fileSize, 0);
 
-                    while (total_bytes_received < fileSize) {
-                        video_length = recv(sock, videoBuffer + total_bytes_received, fileSize - total_bytes_received, 0);
-                        if (video_length <= 0) {
-                            std::cout << "Failed to receive complete video file." << std::endl;
-                            break;
-                        }
-                        total_bytes_received += video_length;
-                    }
-
-                    if (total_bytes_received == fileSize) {
+                    if (bytes_received == fileSize) {
                         // Lưu video nhận được vào file
                         std::ofstream outFile("received_video.avi", std::ios::binary);
                         outFile.write(videoBuffer, fileSize);
                         outFile.close();
                         std::cout << "Video saved as received_video.avi" << std::endl;
                     }
+                    else {
+                        std::cout << "Failed to receive the video file." << std::endl;
+                    }
 
                     delete[] videoBuffer;
-                }
-                else {
-                    std::cout << "Failed to receive file size." << std::endl;
-                }
+                }             
+                
             }
 
-            // Xóa buffer trước khi nhận phản hồi mới
-            memset(buffer, 0, sizeof(buffer));
         }
+
+        // Xóa buffer trước khi nhận phản hồi mới
+        memset(buffer, 0, sizeof(buffer));
     }
 
     // 6. Đóng kết nối

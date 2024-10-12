@@ -124,8 +124,6 @@ void CaptureWebcamImage(const std::string& file_path) {
 
     // Đóng webcam
     cap.release();
-
-    std::cout << "Captured and saved image to: " << file_path << std::endl;
 }
 
 
@@ -304,8 +302,7 @@ int main() {
                 // Dọn dẹp
                 delete[] imgBuffer;
                 imgFile.close();
-                std::cout << "Sent screenshot to client." << std::endl;
-                send(new_socket, "Send image success\n", strlen("Send image success\n"), 0);
+                std::cout << "Sent screenshot to client." << std::endl;         
             }
             else {
                 std::cout << "Failed to open screenshot file." << std::endl;
@@ -335,8 +332,7 @@ int main() {
 
 				// Dọn dẹp
 				delete[] imgBuffer;
-				imgFile.close();
-                send(new_socket, "Send image success\n", strlen("Send image success\n"), 0);
+				imgFile.close();                
 				std::cout << "Sent webcam image to client." << std::endl;
 			}
 			else {
@@ -366,18 +362,26 @@ int main() {
             // Gửi video cho client
             std::ifstream videoFile("D:\\Hp\\Videos\\output_video.avi", std::ios::binary);
             if (videoFile) {
+                // 1. Lấy kích thước file
                 videoFile.seekg(0, std::ios::end);
                 size_t fileSize = videoFile.tellg();
                 videoFile.seekg(0, std::ios::beg);
+
+                // 2. Gửi kích thước file cho client
+                send(new_socket, (char*)&fileSize, sizeof(fileSize), 0);
+
+                // 3. Đọc dữ liệu từ file vào buffer và gửi đi
                 char* videoBuffer = new char[fileSize];
                 videoFile.read(videoBuffer, fileSize);
                 send(new_socket, videoBuffer, fileSize, 0);
+
+                // 4. Giải phóng bộ nhớ và đóng file
                 delete[] videoBuffer;
                 videoFile.close();
                 std::cout << "Sent video to client." << std::endl;
-                send(new_socket, "Send video success\n", strlen("Send video success\n"), 0);
             }
         }
+
 
 		// Xử lý các lệnh không hợp lệnh
         else {
