@@ -1,18 +1,24 @@
+
 #include <iostream>
 #include <winsock2.h> // Thư viện Winsock
 #include <ws2tcpip.h> 
 #include <string>
 #include <fstream>
-#pragma comment(lib, "ws2_32.lib") // Liên kết thư viện Winsock
 
+#pragma comment(lib, "ws2_32.lib") // Liên kết thư viện Winsock
 #define PORT 8080
 
+
+
 int main() {
+    // A. Đọc Email
+
+    // B. Gửi lệnh tới server
     WSADATA wsa;
     SOCKET sock;
     struct sockaddr_in server_addr;
     char buffer[1024] = { 0 };
-
+    
     // 1. Khởi tạo Winsock
     std::cout << "Initializing Winsock..." << std::endl;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
