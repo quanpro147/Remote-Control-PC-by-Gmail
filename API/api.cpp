@@ -21,12 +21,6 @@
 using json = nlohmann::json;
 #define PORT 8080
 
-//"client_secret":"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"
-// "client_id":"353700251656-s4uo0jmu8hvl7042cs7ge3r9gddlm1n5.apps.googleusercontent.com"
-// "redirect_uri":"http://localhost"
-//612933153793-1teill41m3i7t1qkit497uh6q8nkkhmc.apps.googleusercontent.com
-//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
-
 // Hàm callback để xử lý dữ liệu phản hồi
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
     userp->append(static_cast<char*>(contents), size * nmemb);  // Thêm dữ liệu vào chuỗi userp
