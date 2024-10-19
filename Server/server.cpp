@@ -1,17 +1,16 @@
 #include <iostream>
-#include <winsock2.h> // Winsock library
-#include <fstream>    // Thư viện xử lý file
-#include <ctime>      // Thư viện xử lý thời gian
+#include <winsock2.h> 
+#include <fstream>    
+#include <ctime>      
 #include <stdio.h>
 #include <windows.h>
-#include <opencv2/opencv.hpp> // Thư viện OpenCV
+#include <opencv2/opencv.hpp> 
 #include <opencv2/highgui/highgui.hpp>
-#include <opencv2/imgcodecs.hpp> // Để lưu ảnh
-
-//#include <opencv2/opencv.hpp>
-#pragma comment(lib, "ws2_32.lib") // Link Winsock library
+#include <opencv2/imgcodecs.hpp> 
+#pragma comment(lib, "ws2_32.lib")
 
 #define PORT 8080
+const int BUFFER_SIZE = 1024;
 // Các hàm chức năng
 
 // Hàm Screen capture
@@ -86,7 +85,6 @@ void TakeScreenshot(const std::string& file_path) {
     ReleaseDC(NULL, hScreenDC);
 }
 
-
 // Hàm tắt máy
 void ShutdownSystem() {
     // EWX_SHUTDOWN: Tắt máy
@@ -98,7 +96,6 @@ void ShutdownSystem() {
         std::cout << "System is shutting down..." << std::endl;
     }
 }
-
 
 // Hàm webcam capture
 void CaptureWebcamImage(const std::string& file_path) {
@@ -125,7 +122,6 @@ void CaptureWebcamImage(const std::string& file_path) {
     // Đóng webcam
     cap.release();
 }
-
 
 // Hàm quay video từ webcam
 bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_seconds) {
@@ -251,9 +247,21 @@ int main() {
        
         // Xử lý lệnh từ client
         std::cout << "Message from client: " << buffer << std::endl;
+        std::string message(buffer);
+        size_t delimiterPos = message.find(": ");
+        std::string sender = "";
+        std::string request = "";
+        if (delimiterPos != std::string::npos) {
+            sender = message.substr(0, delimiterPos); // Extract sender
+            request = message.substr(delimiterPos + 2); // Extract request
+        }
+        else {
+            std::cout << "Invalid command!" << std::endl;
+            continue;
+        }
 
 		// Gửi danh sách các lệnh có thể thực thi
-        if (strcmp(buffer, "list") == 0) {
+        if (request == "list") {
             const char* available_commands =
                 "Available commands:\n"
                 "1. Shutdown PC\n"
@@ -268,19 +276,19 @@ int main() {
         }
 
         // Xử lý lệnh exit
-        else if (strcmp(buffer, "exit") == 0) {
+        else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
             break; // Thoát vòng lặp khi client gửi lệnh "exit"
         }
 
         // Xử lý lệnh shutdown
-        else if (strcmp(buffer, "shutdown") == 0) {
+        else if (request == "shutdown") {
             std::cout << "Shutdown command received, shutting down..." << std::endl;
             ShutdownSystem();
         }
 
 		// Xử lý lệnh screen capture
-        else if (strcmp(buffer, "screen capture") == 0) {
+        else if (request == "screen capture") {
             // Chụp ảnh từ màn hình và lưu vào file
             TakeScreenshot("D:\\Hp\\Pictures\\Screenshots\\screenshot.bmp");
 
@@ -310,7 +318,7 @@ int main() {
         }
 
         // Xử lý lệnh webcam capture
-		else if (strcmp(buffer, "webcam capture") == 0) {
+		else if (request == "webcam capture") {
 
 			// Chụp ảnh từ webcam và lưu vào file
 			CaptureWebcamImage("D:\\Hp\\Pictures\\Screenshots\\webcam_image.jpg");
@@ -341,7 +349,7 @@ int main() {
 		}
 
 		// Xử lý lệnh webcam record
-        else if (strcmp(buffer, "webcam record") == 0) {
+        else if (request == "webcam record") {
             // Gửi yêu cầu nhập số giây muốn quay video
             std::string prompt = "Enter the number of seconds to record: ";
             send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
@@ -382,11 +390,33 @@ int main() {
             }
         }
 
+        // Xử lý lệnh getFile
+        else if (request == "getFile") {
+            int valread = recv(new_socket, buffer, BUFFER_SIZE, 0);
+            std::string filepath(buffer);
+
+            std::cout << "Yêu cầu file: " << filepath << std::endl;
+
+            std::ifstream file(filepath, std::ios::binary);
+            if (file) {
+                while (!file.eof()) {
+                    file.read(buffer, BUFFER_SIZE);
+                    send(new_socket, buffer, file.gcount(), 0);
+                }
+                file.close();
+                std::cout << "File đã được gửi" << std::endl;
+            }
+            else {
+                const char* msg = "File không tồn tại";
+                send(new_socket, msg, strlen(msg), 0);
+            }
+
+        }
 
 		// Xử lý các lệnh không hợp lệnh
         else {
             send(new_socket, response, strlen(response), 0);
-            std::cout << "Response sent to client." << std::endl;
+            std::cout << "No valid" << std::endl;
         }
     }
 

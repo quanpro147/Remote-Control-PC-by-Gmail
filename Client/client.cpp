@@ -1,128 +1,216 @@
+#define CURL_STATICLIB
 
 #include <iostream>
-#include <winsock2.h> // Thư viện Winsock
+#include <winsock2.h>
 #include <ws2tcpip.h> 
 #include <string>
 #include <fstream>
+#include "curl/curl.h"
+#include "json.hpp"
+#include <sstream>
+#include <ctime>
+#include <iomanip>
+#include <chrono>
+#include <thread>
+#include <set>
+#include <memory>
+#include <vector>
 
-#pragma comment(lib, "ws2_32.lib") // Liên kết thư viện Winsock
-#define PORT 8080
+#pragma comment(lib, "Normaliz.lib")
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "Wldap32.lib")
+#pragma comment(lib, "Crypt32.lib")
+#pragma comment(lib, "advapi32.lib")
 
+using json = nlohmann::json;
+const int BUFFER_SIZE = 1024;
 
-
-int main() {
-    // A. Đọc Email
-
-    // B. Gửi lệnh tới server
-    WSADATA wsa;
+class GmailClient {
+private:
+    static constexpr int PORT = 8080;
+    static constexpr int BUFFER_SIZE = 1024;
+    bool isFirstRun;
+    std::string clientId;
+    std::string clientSecret;
+    std::string refreshToken;
+    std::string accessToken;
+    std::set<std::string> processedIds;
+    std::chrono::system_clock::time_point lastCheckTime;
     SOCKET sock;
-    struct sockaddr_in server_addr;
-    char buffer[1024] = { 0 };
-    
-    // 1. Khởi tạo Winsock
-    std::cout << "Initializing Winsock..." << std::endl;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
-        std::cout << "Failed. Error Code: " << WSAGetLastError() << std::endl;
-        return 1;
+
+    static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
+        userp->append(static_cast<char*>(contents), size * nmemb);
+        return size * nmemb;
+    }
+    // Add these functions inside the GmailClient class as private methods:
+private:
+    std::string getQueryTime() const {
+        auto now = std::chrono::system_clock::now();
+        // Update lastCheckTime only after successfully processing messages
+        auto time_t = std::chrono::system_clock::to_time_t(lastCheckTime);
+        std::tm tm_local;
+
+        #ifdef _WIN32
+                localtime_s(&tm_local, &time_t);
+        #else
+                localtime_r(&time_t, &tm_local);
+        #endif
+
+        // Format using Unix timestamp (epoch seconds)
+        std::ostringstream ss;
+        ss << time_t;
+        return ss.str();
     }
 
-    // 2. Tạo socket
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == INVALID_SOCKET) {
-        std::cout << "Could not create socket: " << WSAGetLastError() << std::endl;
-        return 1;
+    std::string processNewEmails() {
+        try {
+            std::string queryTime = getQueryTime();
+            // Use Unix timestamp directly in the query
+            std::string encodedQuery = "after:" + queryTime;
+            std::string url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=" + encodedQuery;
+
+            std::cout << "\n=== Checking for new emails ===\n";
+
+            std::string response = makeGetRequest(url);
+            
+            json messages = json::parse(response);
+            std::string command = "no command";
+
+            if (messages.contains("messages") && messages["messages"].is_array()) {             
+                for (const auto& message : messages["messages"]) {
+                    std::string messageId = message["id"];                   
+                    if (processedIds.find(messageId) == processedIds.end()) {
+                        command = processMessage(messageId);
+                        processedIds.insert(messageId);
+                        std::cout << "New message processed, command: " << command << std::endl;
+                    }   
+                    else {
+                        std::cout << "No messages found in response\n";
+                    }
+                }
+            }   
+            else {
+                std::cout << "No messages found in response\n";
+            }
+
+            return command;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error processing emails: " << e.what() << std::endl;
+            refreshAccessToken();
+            return "invalid";
+        }
     }
 
-    // 3. Cấu hình địa chỉ server
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT);
-    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
-        std::cout << "Invalid address: " << WSAGetLastError() << std::endl;
-        return 1;
+    std::string processMessage(const std::string& messageId) {
+        try {
+            std::string messageUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + messageId;
+            std::string messageResponse = makeGetRequest(messageUrl);
+
+            json emailData = json::parse(messageResponse);
+            std::string subject, sender;
+
+            // Extract sender and subject from headers
+            for (const auto& header : emailData["payload"]["headers"]) {
+                if (header["name"] == "Subject") {
+                    subject = header["value"];
+                }
+                else if (header["name"] == "From") {
+                    sender = header["value"];
+                    // Extract email address from "Name <email@domain.com>" format
+                    size_t start = sender.find('<');
+                    size_t end = sender.find('>');
+                    if (start != std::string::npos && end != std::string::npos) {
+                        sender = sender.substr(start + 1, end - start - 1);
+                    }
+                }
+            }
+
+            // Format and send command to server
+            std::string command = sender + ": " + subject;
+
+            // Debug output
+            std::cout << "Processing new email: " << command << std::endl;
+
+            send(sock, command.c_str(), command.length(), 0);
+
+            std::cout << "Command sent to server: " << command << std::endl;
+            std::cout << "---" << std::endl;
+			return command;
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error processing message " << messageId << ": " << e.what() << std::endl;
+        }
     }
 
-    // 4. Kết nối tới server
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        std::cout << "Connection failed: " << WSAGetLastError() << std::endl;
-        return 1;
-    }
+    std::string urlEncode(const std::string& value) const {
+        std::ostringstream escaped;
+        escaped.fill('0');
+        escaped << std::hex;
 
-    // 5. Gửi dữ liệu tới server
-    std::string input_message;
-    while (true) {
-        std::cout << "Enter message to server (type 'list' to know detail): ";
-        std::getline(std::cin, input_message);
-
-        // Gửi tin nhắn từ người dùng đến server
-        send(sock, input_message.c_str(), input_message.size() + 1, 0);
-
-        // Kiểm tra nếu người dùng nhập 'exit' thì thoát chương trình
-        if (input_message == "exit") {
-            std::cout << "Exiting..." << std::endl;
-            break;
+        for (char c : value) {
+            if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+                escaped << c;
+            }
+            else {
+                escaped << std::uppercase;
+                escaped << '%' << std::setw(2) << int((unsigned char)c);
+                escaped << std::nouppercase;
+            }
         }
 
-        else if (input_message == "shutdown") {
-            std::cout << "Shutdown command sent to server." << std::endl;
-            break;
-        }
+        return escaped.str();
+    }
+
     std::string makeGetRequest(const std::string& url) const {
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
         std::string response;
 
-        else if (input_message == "list") {
-            int bytes_received = recv(sock, buffer, sizeof(buffer), 0);
-            if (bytes_received > 0) {
-                buffer[bytes_received] = '\0'; // Đảm bảo chuỗi kết thúc bằng null
-                std::cout << "Response from server: " << buffer << std::endl;
+        if (curl) {
+            struct curl_slist* headers = nullptr;
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + accessToken).c_str());
+
+            curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+            curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 10L);
+
+            CURLcode res = curl_easy_perform(curl.get());
+            if (res != CURLE_OK) {
+                throw std::runtime_error(std::string("Curl request failed: ") + curl_easy_strerror(res));
+            }
+
+            curl_slist_free_all(headers);
+        }
+
+        return response;
+    }
+
+    void refreshAccessToken() {
+        std::string postFields = "client_id=" + clientId +
+            "&client_secret=" + clientSecret +
+            "&refresh_token=" + refreshToken +
+            "&grant_type=refresh_token";
+
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+        std::string response;
+
+        if (curl) {
+            curl_easy_setopt(curl.get(), CURLOPT_URL, "https://oauth2.googleapis.com/token");
+            curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, postFields.c_str());
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+
+            CURLcode res = curl_easy_perform(curl.get());
+            if (res != CURLE_OK) {
+                throw std::runtime_error(std::string("Token refresh failed: ") + curl_easy_strerror(res));
             }
         }
 
-        // Nhận file screen capture từ server
-        else if (input_message == "screen capture") {
-            // Nhận kích thước file từ server
-            size_t fileSize;
-            int bytes_received = recv(sock, (char*)&fileSize, sizeof(fileSize), 0);
-            if (bytes_received != sizeof(fileSize)) {
-                std::cout << "Failed to receive file size." << std::endl;
-                break;
-            }
-
-            // Nhận file ảnh từ server
-            char* imgBuffer = new char[fileSize];
-            size_t total_bytes_received = 0;
-            bytes_received = recv(sock, imgBuffer, fileSize, 0);
-
-            // Lưu file ảnh đã nhận
-            std::ofstream outFile("received_screenshot.bmp", std::ios::binary);
-            outFile.write(imgBuffer, fileSize);
-            outFile.close();
-            std::cout << "Screenshot saved as received_screenshot.bmp" << std::endl;
-
-            delete[] imgBuffer;
-        }
-
-        // Nhận file ảnh từ webcam
-        else if (input_message == "webcam capture") {
-            // Nhận kích thước file từ server
-            size_t fileSize;
-            int bytes_received = recv(sock, (char*)&fileSize, sizeof(fileSize), 0);
-            if (bytes_received == sizeof(fileSize)) {
-                // Nhận file ảnh
-                char* imgBuffer = new char[fileSize];
-                bytes_received = recv(sock, imgBuffer, fileSize, 0);
-                if (bytes_received == fileSize) {
-                    // Lưu file ảnh đã nhận
-                    std::ofstream outFile("received_webcam_image.jpg", std::ios::binary);
-                    outFile.write(imgBuffer, fileSize);
-                    outFile.close();
-                    std::cout << "Webcam image saved as received_webcam_image.jpg" << std::endl;
-                }
-                else {
-                    std::cout << "Failed to receive the complete webcam image." << std::endl;
-                }
-
-                delete[] imgBuffer;
-            }
+        json jsonData = json::parse(response);
+        accessToken = jsonData["access_token"];
+    }
 
     //void handleServerCommand(const std::string& command) {
     //    std::vector<char> buffer(BUFFER_SIZE);
@@ -152,162 +240,167 @@ int main() {
     //        std::cout << "invalid command";
     //    }
     //}
-    //void handleServerCommand(const std::string& command) {
-    //    try {
-    //        // Use a smaller, fixed buffer size
-    //        constexpr size_t SAFE_BUFFER_SIZE = 1024;  // 1KB buffer
-    //        std::vector<char> buffer(SAFE_BUFFER_SIZE);
+    void handleServerCommand(const std::string& command) {
+        try {      
 
-    //        // If command is empty or too long, handle as invalid
-    //        if (command.empty() || command.length() > SAFE_BUFFER_SIZE) {
-    //            std::cout << "Invalid command length\n";
-    //            return;
-    //        }
+            // Extract the request part after ": "
+            std::string request = "invalid";
+            size_t colonPos = command.find(": ");
+            if (colonPos != std::string::npos && colonPos + 2 < command.length()) {
+                request = command.substr(colonPos + 2); // +2 to skip ": "
+            }
+            else if (command == "invalid" || command == "no command") {
+                request = command;
+            }
 
-    //        // Extract the request part after ": "
-    //        std::string request = "invalid";
-    //        size_t colonPos = command.find(": ");
-    //        if (colonPos != std::string::npos && colonPos + 2 < command.length()) {
-    //            request = command.substr(colonPos + 2); // +2 to skip ": "
-    //        }
-    //        else if (command == "invalid" || command == "no command") {
-    //            request = command;
-    //        }
+            std::cout << "Parsed request: " << request << std::endl;  // Debug output
+            // Handle the extracted request
+            if (request == "exit") {
+                throw std::runtime_error("Shutdown requested");
+            }
+            else if (request == "list" || request == "screen capture" ||
+                request == "webcam capture" || request == "webcam record" ||
+                request == "shutdown") {
+                 
+                handleServerResponse(request);
+                              
+            }
+            else if (request == "no command") {
+                // Do nothing for "no command"
+                return;
+            }
+            else if (request == "invalid") {
+                // Do nothing for "invalid"
+                return;
+            }
+            else {
+                std::cout << "Invalid command: " << request << std::endl;
+            }
+        }
+        catch (const std::bad_alloc& e) {
+            std::cout << "Memory allocation error: " << e.what() << std::endl;
+        }
+        catch (const std::exception& e) {
+            std::cout << "Error in handleServerCommand: " << e.what() << std::endl;
+        }
+    }
 
-    //        std::cout << "Parsed request: " << request << std::endl;  // Debug output
+    void handleServerResponse(const std::string& command) {
+        if (command == "list") {         
+            std::vector<char> buffer(BUFFER_SIZE);
+            int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
+            buffer[bytes_received] = '\0';  
+            std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        }
+        else if (command == "screen capture" || command == "webcam capture") {
+            receiveFile(command == "screen capture" ? "screenshot.bmp" : "webcam.jpg");
+        }
+        else if (command == "webcam record") {
+            handleWebcamRecording();
+        }
+        else {
+        }
+    }
 
-    //        // Handle the extracted request
-    //        if (request == "exit") {
-    //            throw std::runtime_error("Shutdown requested");
-    //        }
-    //        else if (request == "list" || request == "screen capture" ||
-    //            request == "webcam capture" || request == "webcam record" ||
-    //            request == "shutdown") {
-    //            // Send only the request part to the server
-    //            if (send(sock, request.c_str(), request.size(), 0) < 0) {
-    //                std::cout << "Failed to send command to server\n";
-    //                return;
-    //            }
+    void receiveFile(const std::string& filename) {
+        size_t fileSize;
+        if (recv(sock, reinterpret_cast<char*>(&fileSize), sizeof(fileSize), 0) != sizeof(fileSize)) {
+            throw std::runtime_error("Failed to receive file size");
+        }
+        std::vector<char> buffer(fileSize);
+        if (recv(sock, buffer.data(), fileSize, 0) != fileSize) {
+            throw std::runtime_error("Failed to receive file data");
+        }
 
-    //            int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
-    //            if (bytes_received > 0) {
-    //                buffer[bytes_received] = '\0';  // Ensure null termination
-    //                handleServerResponse(request, buffer.data(), bytes_received);
-    //            }
-    //            else {
-    //                std::cout << "No response from server\n";
-    //            }
-    //        }
-    //        else if (request == "no command") {
-    //            // Do nothing for "no command"
-    //            return;
-    //        }
-    //        else if (request == "invalid") {
-    //            // Do nothing for "invalid"
-    //            return;
-    //        }
-    //        else {
-    //            std::cout << "Invalid command: " << request << std::endl;
-    //        }
-    //    }
-    //    catch (const std::bad_alloc& e) {
-    //        std::cout << "Memory allocation error: " << e.what() << std::endl;
-    //    }
-    //    catch (const std::exception& e) {
-    //        std::cout << "Error in handleServerCommand: " << e.what() << std::endl;
-    //    }
-    //}
-    //void handleServerResponse(const std::string& command, const char* buffer, int bytes_received) {
-    //    if (command == "list") {
-    //        std::cout << "Server response: " << std::string(buffer, bytes_received) << std::endl;
-    //    }
-    //    else if (command == "screen capture" || command == "webcam capture") {
-    //        receiveFile(command == "screen capture" ? "screenshot.bmp" : "webcam.jpg");
-    //    }
-    //    else if (command == "webcam record") {
-    //        handleWebcamRecording();
-    //    }
-    //    else {
-
-    //    }
-    //}
-
-    //void receiveFile(const std::string& filename) {
-    //    size_t fileSize;
-    //    if (recv(sock, reinterpret_cast<char*>(&fileSize), sizeof(fileSize), 0) != sizeof(fileSize)) {
-    //        throw std::runtime_error("Failed to receive file size");
-    //    }
-
-    //    std::vector<char> buffer(fileSize);
-    //    if (recv(sock, buffer.data(), fileSize, 0) != fileSize) {
-    //        throw std::runtime_error("Failed to receive file data");
-    //    }
-
-    //    std::ofstream outFile(filename, std::ios::binary);
-    //    outFile.write(buffer.data(), fileSize);
-    //    std::cout << "File saved as " << filename << std::endl;
-    //}
+        std::ofstream outFile(filename, std::ios::binary);
+        outFile.write(buffer.data(), fileSize);
+        std::cout << "File saved as " << filename << std::endl;
+    }
 
     void handleWebcamRecording() {
-        std::cout << "Enter recording duration (seconds): ";
+        std::vector<char> buffer(BUFFER_SIZE);
+        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
+        buffer[bytes_received] = '\0';
+        std::cout << "Server response: " << std::string(buffer.data(), bytes_received);
         std::string duration;
         std::getline(std::cin, duration);
         send(sock, duration.c_str(), duration.size() + 1, 0);
 
         receiveFile("recording.avi");
-            }
-        }
-
-        // Nhận video webcam từ server
-        else if (input_message == "webcam record") {
-            // Nhận phản hồi từ server về việc bắt đầu quay video
-            int bytes_received_0 = recv(sock, buffer, sizeof(buffer), 0);
-            if (bytes_received_0 > 0) {
-                buffer[bytes_received_0] = '\0';
-                std::cout << "Response from server: " << buffer << std::endl;
-
-                // Nhập số giây muốn quay video
-                std::string seconds;         
-                std::getline(std::cin, seconds);
-
-                // Gửi số giây đến server
-                send(sock, seconds.c_str(), seconds.size() + 1, 0);
-                // Nhận kích thước file video từ server
-                size_t fileSize;
-                int bytes_received = recv(sock, (char*)&fileSize, sizeof(fileSize), 0);
-                if (bytes_received != sizeof(fileSize)) {
-                    std::cout << "Failed to receive file size." << std::endl;
-                }
-                else {
-                    // Nhận file video trong một lần duy nhất
-                    char* videoBuffer = new char[fileSize];
-                    bytes_received = recv(sock, videoBuffer, fileSize, 0);
-
-                    if (bytes_received == fileSize) {
-                        // Lưu video nhận được vào file
-                        std::ofstream outFile("received_video.avi", std::ios::binary);
-                        outFile.write(videoBuffer, fileSize);
-                        outFile.close();
-                        std::cout << "Video saved as received_video.avi" << std::endl;
-                    }
-                    else {
-                        std::cout << "Failed to receive the video file." << std::endl;
-                    }
-
-                    delete[] videoBuffer;
-                }             
-                
-            }
-
-        }
-
-        // Xóa buffer trước khi nhận phản hồi mới
-        memset(buffer, 0, sizeof(buffer));
     }
 
-    // 6. Đóng kết nối
-    closesocket(sock);
-    WSACleanup();
+public:
+    GmailClient(const std::string& clientId, const std::string& clientSecret,
+        const std::string& refreshToken)
+        : clientId(clientId), clientSecret(clientSecret), refreshToken(refreshToken),
+        isFirstRun(true) {
+        lastCheckTime = std::chrono::system_clock::now();
+        refreshAccessToken();
+        initializeSocket();
+    }
+
+    void initializeSocket() {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+            throw std::runtime_error("WSAStartup failed");
+        }
+
+        sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock == INVALID_SOCKET) {
+            throw std::runtime_error("Socket creation failed");
+        }
+
+        sockaddr_in server_addr{};
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(PORT);
+        inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+
+        if (connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
+            throw std::runtime_error("Connection failed");
+        }
+        else {
+			std::cout << "Connected to server" << std::endl;
+        }
+    }
+
+
+    void run() {
+        while (true) {
+            try {
+                std::string command = processNewEmails();
+				handleServerCommand(command);
+                std::this_thread::sleep_for(std::chrono::seconds(10));
+            }
+            catch (const std::runtime_error& e) {
+                if (std::string(e.what()) == "Shutdown requested") {
+                    break;
+                }
+                std::cerr << "Error: " << e.what() << std::endl;
+            }
+        }
+    }
+
+
+    ~GmailClient() {
+        closesocket(sock);
+        WSACleanup();
+    }
+};
+
+int main() {
+    try {
+        GmailClient client(
+            "612933153793-1teill41m3i7t1qkit497uh6q8nkkhmc.apps.googleusercontent.com",
+            "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",
+            "1//0gGlASUVRT34ACgYIARAAGBASNwF-L9IrScLVZvA9HBLZ0Woc-yzUR_B_tAwt9AsYB3p7bhmytamp1sKciabuhRA3Smz8nYHgeG0"
+        );
+
+        client.run();
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
