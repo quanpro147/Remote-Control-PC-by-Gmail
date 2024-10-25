@@ -489,7 +489,57 @@ private:
         std::cout << "Completed sendEmailToOriginalSender" << std::endl;
     }
 
-    void sendEmailResponse(const std::string& recipientEmail, const std::string& subject, const std::string& body) {
+    std::string readFileToBase64(const std::string& filepath) {
+        std::ifstream file(filepath, std::ios::binary);
+        if (!file) {
+            throw std::runtime_error("Cannot open file: " + filepath);
+        }
+
+        // Read file into buffer
+        std::vector<char> buffer(std::istreambuf_iterator<char>(file), {});
+        file.close();
+
+        return base64_encode(std::string(buffer.begin(), buffer.end()));
+    }
+
+    std::string createMultipartMessage(const std::string& recipientEmail,
+        const std::string& subject,
+        const std::string& body,
+        const std::string& imagePath) {
+        // Generate a random boundary
+        std::string boundary = "boundary" + std::to_string(std::rand());
+
+        // Create the MIME message
+        std::string message;
+        message += "MIME-Version: 1.0\r\n";
+        message += "From: me\r\n";
+        message += "To: " + recipientEmail + "\r\n";
+        message += "Subject: =?UTF-8?B?" + base64_encode(subject) + "?=\r\n";
+        message += "Content-Type: multipart/mixed; boundary=" + boundary + "\r\n\r\n";
+
+        // Text part
+        message += "--" + boundary + "\r\n";
+        message += "Content-Type: text/plain; charset=utf-8\r\n";
+        message += "Content-Transfer-Encoding: base64\r\n\r\n";
+        message += base64_encode(body) + "\r\n\r\n";
+
+        // Image part
+        message += "--" + boundary + "\r\n";
+        message += "Content-Type: image/jpeg\r\n";
+        message += "Content-Transfer-Encoding: base64\r\n";
+        message += "Content-Disposition: attachment; filename=\"" +
+            imagePath.substr(imagePath.find_last_of("/\\") + 1) + "\"\r\n\r\n";
+        message += readFileToBase64(imagePath) + "\r\n\r\n";
+
+        // End boundary
+        message += "--" + boundary + "--\r\n";
+
+        return message;
+    }
+
+    // Modify the sendEmailResponse function to handle attachments:
+    void sendEmailResponse(const std::string& recipientEmail, const std::string& subject,
+        const std::string& body, const std::string& imagePath = "") {
         try {
             std::cout << "Starting sendEmailResponse..." << std::endl;
             std::string url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
