@@ -12,10 +12,68 @@
 #include <codecvt>
 #include <tlhelp32.h>
 #include <psapi.h>
-#pragma comment(lib, "ws2_32.lib")
+#include <gdiplus.h>
+#include <cstdio>
 
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "gdiplus.lib")
 #define PORT 8080
 const int BUFFER_SIZE = 1024;
+// Các hàm phụ
+void sendData(SOCKET new_socket, const std::string& data) {
+    int totalSent = 0;
+    int dataLength = data.length();
+    while (totalSent < dataLength) {
+        int sent = send(new_socket, data.c_str() + totalSent, dataLength - totalSent, 0);
+        if (sent == SOCKET_ERROR) {
+            std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
+            return;
+        }
+        totalSent += sent;
+    }
+}
+void handleSendFile(const std::string& file_path, SOCKET new_socket) {
+    std::ifstream file(file_path, std::ios::binary);
+    if (file) {
+        // Determine the size of the file
+        file.seekg(0, std::ios::end);
+        // Sử dụng uint32_t thay vì size_t
+        uint32_t fileSize = static_cast<uint32_t>(file.tellg());
+        file.seekg(0, std::ios::beg);
+
+        std::cout << "File size to send: " << fileSize << " bytes" << std::endl;
+
+        // Send the file size
+        if (send(new_socket, reinterpret_cast<const char*>(&fileSize), sizeof(uint32_t), 0) < 0) {
+            std::cerr << "Failed to send file size. Error: " << WSAGetLastError() << std::endl;
+            file.close();
+            return;
+        }
+
+        // Rest of the code remains the same
+        char* buffer = new char[fileSize];
+        file.read(buffer, fileSize);
+
+        size_t totalBytesSent = 0;
+        while (totalBytesSent < fileSize) {
+            int result = send(new_socket, buffer + totalBytesSent, fileSize - totalBytesSent, 0);
+            if (result < 0) {
+                std::cerr << "Failed to send file data." << std::endl;
+                delete[] buffer;
+                file.close();
+                return;
+            }
+            totalBytesSent += result;
+        }
+
+        delete[] buffer;
+        file.close();
+        std::cout << "Sent file to client." << std::endl;
+    }
+    else {
+        std::cerr << "Failed to open file." << std::endl;
+    }
+}
 // Các hàm chức năng
 // Hàm tắt máy
 void ShutdownSystem() {
@@ -29,128 +87,97 @@ void ShutdownSystem() {
     }
 }
 
-// Hàm Screen capture
-void SaveBitmapToFile(HBITMAP hBitmap, const std::string& file_path) {
-    BITMAP bmp;
-    GetObject(hBitmap, sizeof(BITMAP), &bmp);
+class GdiplusInitializer {
+public:
+    GdiplusInitializer() {
+        Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+        Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusStartupInput, nullptr);
+    }
+    ~GdiplusInitializer() {
+        Gdiplus::GdiplusShutdown(gdiplusToken);
+    }
+private:
+    ULONG_PTR gdiplusToken;
+};
+// Hàm chụp ảnh
+void SaveScreenshotToJPG(const std::wstring& file_path, ULONG quality = 90) {
+    // Khởi tạo GDI+
+    GdiplusInitializer gdiplusInit;
 
-    BITMAPFILEHEADER bmfHeader;
-    BITMAPINFOHEADER bi;
-    DWORD dwSize;
-
-    bi.biSize = sizeof(BITMAPINFOHEADER);
-    bi.biWidth = bmp.bmWidth;
-    bi.biHeight = bmp.bmHeight;
-    bi.biPlanes = 1;
-    bi.biBitCount = 24; // 24-bit bitmap
-    bi.biCompression = BI_RGB;
-    bi.biSizeImage = 0;
-    bi.biXPelsPerMeter = 0;
-    bi.biYPelsPerMeter = 0;
-    bi.biClrUsed = 0;
-    bi.biClrImportant = 0;
-
-    dwSize = ((bmp.bmWidth * 3 + 3) & ~3) * bmp.bmHeight;
-
-    // Tạo file để lưu ảnh
-    HANDLE hFile = CreateFileA(file_path.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-    bmfHeader.bfType = 0x4D42; // 'BM'
-    bmfHeader.bfSize = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + dwSize;
-    bmfHeader.bfReserved1 = 0;
-    bmfHeader.bfReserved2 = 0;
-    bmfHeader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-
-    DWORD dwWritten;
-    WriteFile(hFile, &bmfHeader, sizeof(BITMAPFILEHEADER), &dwWritten, NULL);
-    WriteFile(hFile, &bi, sizeof(BITMAPINFOHEADER), &dwWritten, NULL);
-
-    BYTE* pBitmap = new BYTE[dwSize];
-    HDC hScreenDC = GetDC(NULL);
-    HDC hMemoryDC = CreateCompatibleDC(hScreenDC);
-    HBITMAP hOldBitmap = (HBITMAP)SelectObject(hMemoryDC, hBitmap);
-
-    GetDIBits(hMemoryDC, hBitmap, 0, bmp.bmHeight, pBitmap, (BITMAPINFO*)&bi, DIB_RGB_COLORS);
-    WriteFile(hFile, pBitmap, dwSize, &dwWritten, NULL);
-
-    // Dọn dẹp
-    delete[] pBitmap;
-    SelectObject(hMemoryDC, hOldBitmap);
-    DeleteDC(hMemoryDC);
-    ReleaseDC(NULL, hScreenDC);
-    CloseHandle(hFile);
-}
-void TakeScreenshot(const std::string& file_path) {
-    HDC hScreenDC = GetDC(NULL);
-    HDC hMemoryDC = CreateCompatibleDC(hScreenDC);
-
+    // Lấy kích thước màn hình
     int width = GetSystemMetrics(SM_CXSCREEN);
     int height = GetSystemMetrics(SM_CYSCREEN);
 
-    HBITMAP hBitmap = CreateCompatibleBitmap(hScreenDC, width, height);
-    SelectObject(hMemoryDC, hBitmap);
+    // Tạo DC và bitmap
+    HDC screenDC = GetDC(NULL);
+    HDC memDC = CreateCompatibleDC(screenDC);
+    HBITMAP hBitmap = CreateCompatibleBitmap(screenDC, width, height);
+    HBITMAP hOldBitmap = (HBITMAP)SelectObject(memDC, hBitmap);
 
-    BitBlt(hMemoryDC, 0, 0, width, height, hScreenDC, 0, 0, SRCCOPY);
+    // Chụp màn hình
+    BitBlt(memDC, 0, 0, width, height, screenDC, 0, 0, SRCCOPY);
 
-    // Lưu bitmap vào file
-    SaveBitmapToFile(hBitmap, file_path);
+    // Chuyển HBITMAP sang Gdiplus::Bitmap
+    Gdiplus::Bitmap* bitmap = Gdiplus::Bitmap::FromHBITMAP(hBitmap, NULL);
+
+    // Cấu hình encoder cho JPEG
+    CLSID encoderClsid;
+    {
+        const WCHAR* format = L"image/jpeg";
+        UINT num = 0;
+        UINT size = 0;
+        Gdiplus::GetImageEncodersSize(&num, &size);
+        if (size > 0) {
+            std::unique_ptr<Gdiplus::ImageCodecInfo[]> pImageCodecInfo(new Gdiplus::ImageCodecInfo[size]);
+            Gdiplus::GetImageEncoders(num, size, pImageCodecInfo.get());
+            for (UINT j = 0; j < num; ++j) {
+                if (wcscmp(pImageCodecInfo[j].MimeType, format) == 0) {
+                    encoderClsid = pImageCodecInfo[j].Clsid;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Thiết lập chất lượng JPEG
+    Gdiplus::EncoderParameters encoderParams;
+    encoderParams.Count = 1;
+    encoderParams.Parameter[0].Guid = Gdiplus::EncoderQuality;
+    encoderParams.Parameter[0].Type = Gdiplus::EncoderParameterValueTypeLong;
+    encoderParams.Parameter[0].NumberOfValues = 1;
+    encoderParams.Parameter[0].Value = &quality;
+
+    // Lưu file
+    bitmap->Save(file_path.c_str(), &encoderClsid, &encoderParams);
 
     // Dọn dẹp
+    delete bitmap;
+    SelectObject(memDC, hOldBitmap);
     DeleteObject(hBitmap);
-    DeleteDC(hMemoryDC);
-    ReleaseDC(NULL, hScreenDC);
+    DeleteDC(memDC);
+    ReleaseDC(NULL, screenDC);
 }
-// Hàm webcam capture
+void TakeScreenshot(const std::string& file_path, ULONG quality = 90) {
+    // Chuyển đổi string sang wstring
+    std::wstring wide_path(file_path.begin(), file_path.end());
+    SaveScreenshotToJPG(wide_path, quality);
+}
 void CaptureWebcamImage(const std::string& file_path) {
-    // Mở webcam
-    cv::VideoCapture cap(0); // 0 là ID của webcam mặc định
+   
+    cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
         std::cerr << "Error: Could not open webcam." << std::endl;
         return;
     }
-
-    // Đọc frame từ webcam
     cv::Mat frame;
     cap >> frame;
-
-    // Kiểm tra xem frame có rỗng không
     if (frame.empty()) {
         std::cerr << "Error: Could not capture image from webcam." << std::endl;
         return;
     }
-
-    // Lưu ảnh vào file
     cv::imwrite(file_path, frame);
-
-    // Đóng webcam
     cap.release();
 }
-void handleSendFile(const std::string& file_path, SOCKET new_socket) {
-    std::ifstream imgFile("D:\\Hp\\Pictures\\Screenshots\\webcam_image.jpg", std::ios::binary);
-    if (imgFile) {
-        imgFile.seekg(0, std::ios::end);
-        size_t fileSize = imgFile.tellg(); // Lấy kích thước file
-        imgFile.seekg(0, std::ios::beg);
-
-        // Gửi kích thước file trước
-        send(new_socket, (char*)&fileSize, sizeof(fileSize), 0);
-
-        // Gửi dữ liệu file ảnh
-        char* imgBuffer = new char[fileSize];
-        imgFile.read(imgBuffer, fileSize);
-        send(new_socket, imgBuffer, fileSize, 0);
-
-        // Dọn dẹp
-        delete[] imgBuffer;
-        imgFile.close();
-        std::cout << "Sent image to client." << std::endl;
-    }
-    else {
-        std::cout << "Failed to open image file." << std::endl;
-    }
-}
-
-// Hàm quay video từ webcam
 bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_seconds) {
     // Mở webcam (0 là chỉ số của webcam mặc định)
     cv::VideoCapture cap(0);
@@ -211,129 +238,38 @@ bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_secon
     return true;
 }
 
-// Helper function to find the executable in a directory
-std::wstring findExecutableInDirectory(const std::wstring& directory) {
-    std::wstring searchPath = directory + L"\\*.exe";
-    WIN32_FIND_DATA findData;
-    HANDLE hFind = FindFirstFile(searchPath.c_str(), &findData);
-
-    if (hFind != INVALID_HANDLE_VALUE) {
-        FindClose(hFind);
-        return directory + L"\\" + findData.cFileName;
-    }
-    return L"";
-}
-
-// Hàm lấy danh sách các ứng dụng đã cài đặt
-std::vector<std::wstring> getListApps() {
+// Hàm lấy danh sách ứng dụng đã cài đặt
+std::vector<std::wstring> getInstalledApps() {
     std::vector<std::wstring> app_list;
-    std::set<std::wstring> unique_apps;  // Use set to prevent duplicates and maintain consistency
-    HKEY hUninstallKey = NULL;
-    HKEY hAppKey = NULL;
 
-    // Define registry paths to check
-    struct RegPath {
-        HKEY hKey;
-        const wchar_t* path;
-    };
+    std::wstring command =
+        L"Get-ItemProperty -Path \"HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\","
+        L"\"HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\","
+        L"\"HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\" |"
+        L" Where-Object {$_.DisplayName -ne $null} | Select-Object -ExpandProperty DisplayName";
 
-    RegPath paths[] = {
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"},
-        {HKEY_LOCAL_MACHINE, L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall"},
-        {HKEY_CURRENT_USER, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall"}
-    };
+    std::wstring powershellCommand = L"powershell.exe -Command \"" + command + L"\"";
 
-    for (const auto& regPath : paths) {
-        if (RegOpenKeyEx(regPath.hKey, regPath.path, 0, KEY_READ, &hUninstallKey) != ERROR_SUCCESS) {
-            continue;
-        }
-
-        // Get the number of subkeys
-        DWORD subKeyCount = 0;
-        DWORD maxSubKeyLen = 0;
-        if (RegQueryInfoKey(hUninstallKey, NULL, NULL, NULL, &subKeyCount, &maxSubKeyLen,
-            NULL, NULL, NULL, NULL, NULL, NULL) != ERROR_SUCCESS) {
-            RegCloseKey(hUninstallKey);
-            continue;
-        }
-
-        // Allocate buffer for subkey name
-        std::vector<TCHAR> appName(maxSubKeyLen + 1);
-
-        // Enumerate all subkeys
-        for (DWORD i = 0; i < subKeyCount; i++) {
-            DWORD nameSize = maxSubKeyLen + 1;
-            LONG result = RegEnumKeyEx(hUninstallKey, i, appName.data(), &nameSize,
-                NULL, NULL, NULL, NULL);
-
-            if (result == ERROR_SUCCESS) {
-                if (RegOpenKeyEx(hUninstallKey, appName.data(), 0, KEY_READ, &hAppKey) == ERROR_SUCCESS) {
-                    TCHAR displayName[256] = { 0 };
-                    TCHAR installLocation[1024] = { 0 };
-                    TCHAR displayIcon[1024] = { 0 };
-                    DWORD displayNameSize = sizeof(displayName);
-                    DWORD installLocationSize = sizeof(installLocation);
-                    DWORD displayIconSize = sizeof(displayIcon);
-
-                    // Get DisplayName
-                    if (RegQueryValueEx(hAppKey, L"DisplayName", NULL, NULL,
-                        (LPBYTE)displayName, &displayNameSize) == ERROR_SUCCESS) {
-                        std::wstring executablePath;
-                        bool hasValidPath = false;
-
-                        // Try DisplayIcon first
-                        if (RegQueryValueEx(hAppKey, L"DisplayIcon", NULL, NULL,
-                            (LPBYTE)displayIcon, &displayIconSize) == ERROR_SUCCESS) {
-                            executablePath = displayIcon;
-                            size_t commaPos = executablePath.find(L',');
-                            if (commaPos != std::wstring::npos) {
-                                executablePath = executablePath.substr(0, commaPos);
-                            }
-                            hasValidPath = true;
-                        }
-                        // Try InstallLocation if DisplayIcon failed
-                        else if (RegQueryValueEx(hAppKey, L"InstallLocation", NULL, NULL,
-                            (LPBYTE)installLocation, &installLocationSize) == ERROR_SUCCESS) {
-                            std::wstring path = installLocation;
-                            if (!path.empty()) {
-                                WIN32_FIND_DATA findData;
-                                std::wstring searchPath = path + L"\\*.exe";
-                                HANDLE hFind = FindFirstFile(searchPath.c_str(), &findData);
-                                if (hFind != INVALID_HANDLE_VALUE) {
-                                    executablePath = path + L"\\" + findData.cFileName;
-                                    hasValidPath = true;
-                                    FindClose(hFind);
-                                }
-                            }
-                        }
-
-                        if (hasValidPath) {
-                            // Clean up the path
-                            if (!executablePath.empty()) {
-                                if (executablePath.front() == L'"' && executablePath.back() == L'"') {
-                                    executablePath = executablePath.substr(1, executablePath.length() - 2);
-                                }
-
-                                // Only add if the executable exists
-                                if (GetFileAttributes(executablePath.c_str()) != INVALID_FILE_ATTRIBUTES) {
-                                    std::wstring appInfo = std::wstring(displayName) + L" - " + executablePath;
-                                    unique_apps.insert(appInfo);
-                                }
-                            }
-                        }
-                    }
-                    RegCloseKey(hAppKey);
-                }
-            }
-        }
-        RegCloseKey(hUninstallKey);
+    FILE* pipe = _wpopen(powershellCommand.c_str(), L"r");
+    if (!pipe) {
+        std::wcerr << L"Failed to run PowerShell command." << std::endl;
+        return app_list;
     }
 
-    // Convert set to vector
-    app_list.assign(unique_apps.begin(), unique_apps.end());
+    wchar_t buffer[256];
+    int index = 1;
+    while (fgetws(buffer, 256, pipe)) {
+        std::wstring app = buffer;
+        app.erase(app.find_last_not_of(L"\r\n") + 1);
+        if (!app.empty()) {
+            app_list.push_back(std::to_wstring(index++) + L". " + app);
+        }
+    }
+
+    _pclose(pipe);
+
     return app_list;
 }
-
 // Hàm chạy ứng dụng
 void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
     if (appIndex < 0 || appIndex >= app_list.size()) {
@@ -544,7 +480,7 @@ int main() {
             std::cout << "Client disconnected." << std::endl;
             break; // Kết thúc khi client ngắt kết nối
         }
-        buffer[recv_size] = '\0'; // Đảm bảo chuỗi kết thúc bằng null
+        buffer[recv_size] = '\0';
        
         // Xử lý lệnh từ client
         std::cout << "Message from client: " << buffer << std::endl;
@@ -560,7 +496,7 @@ int main() {
             std::cout << "Invalid command!" << std::endl;
             continue;
         }
-
+        //std::string request = buffer;
 		// Gửi danh sách các lệnh có thể thực thi
         if (request == "list") {
             const char* available_commands =
@@ -629,29 +565,9 @@ int main() {
             int duration = std::stoi(timeBuffer);
 
             // Quay video và lưu thành file
-            RecordVideoFromWebcam("D:\\Hp\\Videos\\output_video.avi", duration);
-
+            RecordVideoFromWebcam("D:\\Hp\\Videos\\webcam_video.avi", duration);
             // Gửi video cho client
-            std::ifstream videoFile("D:\\Hp\\Videos\\output_video.avi", std::ios::binary);
-            if (videoFile) {
-                // 1. Lấy kích thước file
-                videoFile.seekg(0, std::ios::end);
-                size_t fileSize = videoFile.tellg();
-                videoFile.seekg(0, std::ios::beg);
-
-                // 2. Gửi kích thước file cho client
-                send(new_socket, (char*)&fileSize, sizeof(fileSize), 0);
-
-                // 3. Đọc dữ liệu từ file vào buffer và gửi đi
-                char* videoBuffer = new char[fileSize];
-                videoFile.read(videoBuffer, fileSize);
-                send(new_socket, videoBuffer, fileSize, 0);
-
-                // 4. Giải phóng bộ nhớ và đóng file
-                delete[] videoBuffer;
-                videoFile.close();
-                std::cout << "Sent video to client." << std::endl;
-            }
+            handleSendFile("D:\\Hp\\Videos\\webcam_video.avi", new_socket);
         }
 
         // Xử lý lệnh getFile
@@ -678,27 +594,31 @@ int main() {
         }
 
         // Xử lý lệnh getListApps
-		else if (request == "getListApps") {
-            std::vector<std::wstring> app_list = getListApps();
+        else if (request == "getListApps") {    
+            std::vector<std::wstring> app_list = getInstalledApps();
             std::string app_list_str = "Installed applications:\n";
-
-            // Converter for wstring to string
             std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-
             for (const std::wstring& app : app_list) {
-                // Convert wstring to string
                 std::string app_str = converter.to_bytes(app);
-                app_list_str += app_str + "\n"; // Add each app to the list with a newline
+                app_list_str += app_str + "\n";
             }
+            size_t total_bytes_sent = 0;
+            size_t bytes_to_send = app_list_str.size() + 1;
+            const char* data = app_list_str.c_str();
 
-            // Send the list to the client
-            send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
-            std::cout << "Sent list of installed applications to client." << std::endl;
-		}
-        
+            while (total_bytes_sent < bytes_to_send) {
+                int bytes_sent = send(new_socket, data + total_bytes_sent, bytes_to_send - total_bytes_sent, 0);
+                if (bytes_sent == SOCKET_ERROR) {
+                    std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
+                    break;
+                }
+                total_bytes_sent += bytes_sent;
+            }
+			std::cout << "Sent list of installed apps to client." << std::endl;
+        }
         // Xử lý lệnh runApp
         else if (request == "runApp") {
-			std::vector<std::wstring> app_list = getListApps();
+			std::vector<std::wstring> app_list = getInstalledApps();
 
 			// Gửi danh sách ứng dụng cho client
 			std::string app_list_str = "Choose an app to run:\n";
@@ -723,7 +643,7 @@ int main() {
         
         // Xử lý lệnh closeApp
         else if (request == "closeApp") {
-            std::vector<std::wstring> app_list = getListApps();
+            std::vector<std::wstring> app_list = getInstalledApps();
             handleCloseApp(app_list, new_socket);
         }
 		// Xử lý các lệnh không hợp lệnh
