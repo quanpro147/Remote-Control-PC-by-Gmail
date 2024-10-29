@@ -28,6 +28,10 @@ private:
         else if (command == "screen capture" || command == "webcam capture") {
             receiveFile(command == "screen capture" ? "screenshot.bmp" : "webcam.jpg");
         }
+        else if (command == "getFile") {
+            
+            
+        }
         else if (command == "webcam record") {
             handleWebcamRecording();
         }
@@ -37,6 +41,13 @@ private:
         else if (command == "closeApp") {
             handleCloseApp();
         }
+    }
+
+    std::vector<char> receiveSeverReponse() {
+        std::vector<char> buffer(BUFFER_SIZE);
+        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
+        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        return buffer;
     }
 
     void receiveFile(const std::string& filename) {
@@ -92,12 +103,15 @@ private:
 
         std::cout << "File saved as " << filename << std::endl;
     }
+    
+    void handleGetFile() {
+        std::vector<char> buffer(BUFFER_SIZE);
+        buffer = receiveSeverReponse();
+    }
 
     void handleRunApp() {
         std::vector<char> buffer(BUFFER_SIZE);
-        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
-        buffer[bytes_received] = '\0';
-        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        buffer = receiveSeverReponse();
         int appIndex;
         std::cout << "Enter the index of the app you want to run: ";
         std::cin >> appIndex;
@@ -106,9 +120,7 @@ private:
 
     void handleCloseApp() {
         std::vector<char> buffer(BUFFER_SIZE);
-        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
-        buffer[bytes_received] = '\0';
-        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        buffer = receiveSeverReponse();
         int appIndex;
         std::cout << "Enter the index of the app you want to close: ";
         std::cin >> appIndex;
@@ -117,17 +129,8 @@ private:
 
     void handleWebcamRecording() {
         try {
-            // Receive prompt from server
             std::vector<char> buffer(BUFFER_SIZE);
-            int bytes_received = recv(sock, buffer.data(), BUFFER_SIZE - 1, 0);
-
-            if (bytes_received <= 0) {
-                throw std::runtime_error("Failed to receive server prompt for webcam recording");
-            }
-
-            buffer[bytes_received] = '\0';
-            std::cout << "Server response: " << buffer.data();
-
+            buffer = receiveSeverReponse();
             // Get recording duration from user
             std::string duration;
             std::getline(std::cin, duration);
@@ -137,16 +140,10 @@ private:
             if (sent_bytes <= 0) {
                 throw std::runtime_error("Failed to send duration to server");
             }
-
             std::cout << "Waiting for server to start recording...\n";
 
             // Wait for server confirmation
-            bytes_received = recv(sock, buffer.data(), BUFFER_SIZE - 1, 0);
-            if (bytes_received <= 0) {
-                throw std::runtime_error("Failed to receive recording confirmation from server");
-            }
-            buffer[bytes_received] = '\0';
-
+            buffer = receiveSeverReponse();
             // Check server response
             if (std::string(buffer.data()) == "RECORDING_STARTED") {
                 std::cout << "Server has started recording. Please wait...\n";

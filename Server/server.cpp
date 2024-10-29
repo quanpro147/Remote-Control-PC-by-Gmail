@@ -14,11 +14,15 @@
 #include <psapi.h>
 #include <gdiplus.h>
 #include <cstdio>
+#include <winsvc.h>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "Advapi32.lib")
+
 #define PORT 8080
 const int BUFFER_SIZE = 1024;
+
 // Các hàm phụ
 void sendData(SOCKET new_socket, const std::string& data) {
     int totalSent = 0;
@@ -40,8 +44,6 @@ void handleSendFile(const std::string& file_path, SOCKET new_socket) {
         // Sử dụng uint32_t thay vì size_t
         uint32_t fileSize = static_cast<uint32_t>(file.tellg());
         file.seekg(0, std::ios::beg);
-
-        std::cout << "File size to send: " << fileSize << " bytes" << std::endl;
 
         // Send the file size
         if (send(new_socket, reinterpret_cast<const char*>(&fileSize), sizeof(uint32_t), 0) < 0) {
@@ -237,7 +239,115 @@ bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_secon
 
     return true;
 }
+// Hàm lấy danh sách dịch vụ
+std::vector<std::wstring> getServicesList() {
+    std::vector<std::wstring> services_list;
+    SC_HANDLE scManager = OpenSCManager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
 
+    if (scManager == NULL) {
+        std::wcerr << L"Failed to open Service Control Manager. Error: " << GetLastError() << std::endl;
+        return services_list;
+    }
+
+    DWORD bytesNeeded = 0;
+    DWORD servicesReturned = 0;
+    DWORD resumeHandle = 0;
+
+    // First call to get required buffer size
+    EnumServicesStatusEx(
+        scManager,
+        SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,
+        SERVICE_STATE_ALL,
+        NULL,
+        0,
+        &bytesNeeded,
+        &servicesReturned,
+        &resumeHandle,
+        NULL
+    );
+
+    if (bytesNeeded == 0) {
+        CloseServiceHandle(scManager);
+        return services_list;
+    }
+
+    // Allocate memory for services
+    LPBYTE lpServices = new BYTE[bytesNeeded];
+    ENUM_SERVICE_STATUS_PROCESS* services = (ENUM_SERVICE_STATUS_PROCESS*)lpServices;
+
+    // Second call to get actual data
+    if (EnumServicesStatusEx(
+        scManager,
+        SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,
+        SERVICE_STATE_ALL,
+        lpServices,
+        bytesNeeded,
+        &bytesNeeded,
+        &servicesReturned,
+        &resumeHandle,
+        NULL
+    )) {
+        // Process each service
+        for (DWORD i = 0; i < servicesReturned; i++) {
+            std::wstring serviceName = services[i].lpServiceName;
+            std::wstring displayName = services[i].lpDisplayName;
+            std::wstring serviceStatus;
+
+            // Convert service status to string
+            switch (services[i].ServiceStatusProcess.dwCurrentState) {
+            case SERVICE_RUNNING:
+                serviceStatus = L"Running";
+                break;
+            case SERVICE_STOPPED:
+                serviceStatus = L"Stopped";
+                break;
+            case SERVICE_PAUSED:
+                serviceStatus = L"Paused";
+                break;
+            case SERVICE_START_PENDING:
+                serviceStatus = L"Starting";
+                break;
+            case SERVICE_STOP_PENDING:
+                serviceStatus = L"Stopping";
+                break;
+            case SERVICE_PAUSE_PENDING:
+                serviceStatus = L"Pausing";
+                break;
+            case SERVICE_CONTINUE_PENDING:
+                serviceStatus = L"Continuing";
+                break;
+            default:
+                serviceStatus = L"Unknown";
+            }
+
+            // Format service information
+            std::wstring serviceInfo = std::to_wstring(i + 1) + L". " +
+                displayName + L" (" + serviceName + L") - " +
+                serviceStatus;
+            services_list.push_back(serviceInfo);
+        }
+    }
+
+    delete[] lpServices;
+    CloseServiceHandle(scManager);
+    return services_list;
+}
+void handleGetServices(SOCKET new_socket) {
+    std::vector<std::wstring> services_list = getServicesList();
+
+    // Convert the list to string for sending
+    std::string services_str = "Windows Services:\n";
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+
+    for (const std::wstring& service : services_list) {
+        services_str += converter.to_bytes(service) + "\n";
+    }
+
+    // Send the services list to client
+    sendData(new_socket, services_str);
+}
 // Hàm lấy danh sách ứng dụng đã cài đặt
 std::vector<std::wstring> getInstalledApps() {
     std::vector<std::wstring> app_list;
@@ -510,11 +620,18 @@ int main() {
                 "7. Webcam record\n"
                 "8. Get file\n"
                 "9. Get list apps\n"
-                "10. Run app\n";
+                "10. Run app\n"
+                "11. Close app\n"
+                "12. List services\n";
             send(new_socket, available_commands, strlen(available_commands), 0);
             std::cout << "Sent list of available commands to client." << std::endl;
         }
 
+		else if (request == "list services") {
+            handleGetServices(new_socket);
+            std::cout << "Sent list of Windows services to client." << std::endl;			
+		}
+        
         // Xử lý lệnh exit
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
@@ -553,8 +670,9 @@ int main() {
             // Gửi yêu cầu nhập số giây muốn quay video
             std::string prompt = "Enter the number of seconds to record: ";
             send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
-
+            
             // Nhận số giây từ client
+            std::cout << "Waiting duration from client...\n";
             char timeBuffer[10];
             int time_received = recv(new_socket, timeBuffer, sizeof(timeBuffer), 0);
             if (time_received <= 0) {
@@ -572,25 +690,12 @@ int main() {
 
         // Xử lý lệnh getFile
         else if (request == "getFile") {
-            int valread = recv(new_socket, buffer, BUFFER_SIZE, 0);
+            std::string prompt = "Enter the file path: ";
+            send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
+            recv(new_socket, buffer, BUFFER_SIZE, 0);
             std::string filepath(buffer);
-
-            std::cout << "Yêu cầu file: " << filepath << std::endl;
-
-            std::ifstream file(filepath, std::ios::binary);
-            if (file) {
-                while (!file.eof()) {
-                    file.read(buffer, BUFFER_SIZE);
-                    send(new_socket, buffer, file.gcount(), 0);
-                }
-                file.close();
-                std::cout << "File đã được gửi" << std::endl;
-            }
-            else {
-                const char* msg = "File không tồn tại";
-                send(new_socket, msg, strlen(msg), 0);
-            }
-
+            std::cout << "Request file from client: " << filepath << std::endl;
+            handleSendFile(filepath, new_socket);       
         }
 
         // Xử lý lệnh getListApps
@@ -616,6 +721,7 @@ int main() {
             }
 			std::cout << "Sent list of installed apps to client." << std::endl;
         }
+
         // Xử lý lệnh runApp
         else if (request == "runApp") {
 			std::vector<std::wstring> app_list = getInstalledApps();

@@ -25,12 +25,10 @@
 using json = nlohmann::json;
 const int BUFFER_SIZE = 1024;
 
-
 static const std::string base64_chars =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 "abcdefghijklmnopqrstuvwxyz"
 "0123456789+/";
-
 
 std::string base64_encode(const std::string& in) {
     std::string out;
@@ -47,11 +45,38 @@ std::string base64_encode(const std::string& in) {
     while (out.size() % 4) out.push_back('=');
     return out;
 }
+std::string base64_decode(const std::string& in) {
+    std::string out;
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++) {
+        T[base64_chars[i]] = i;
+    }
+    int val = 0, valb = -8;
+    for (unsigned char c : in) {
+        if (T[c] == -1) break;  // Ignore padding '='
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(char((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+std::string getFirstLine(const std::string& str) {
+    std::string result = str;
+    while (!result.empty() && (std::isspace(result.back()) || result.back() == '\n' || result.back() == '\r')) {
+        result.pop_back();
+    }
+    return result;
+}
+
 
 class GmailClient {
 private:
     static constexpr int PORT = 8080;
     static constexpr int BUFFER_SIZE = 1024;
+    static constexpr int BUFFER_SIZE_PRO_MAX = 20480;
     bool isFirstRun;
     std::string clientId;
     std::string clientSecret;
@@ -127,7 +152,7 @@ private:
             std::string messageResponse = makeGetRequest(messageUrl);
 
             json emailData = json::parse(messageResponse);
-            std::string subject, sender;
+            std::string body, sender;
 
             // Extract sender and subject from headers
             for (const auto& header : emailData["payload"]["headers"]) {
@@ -144,14 +169,19 @@ private:
                     if (sender == ownEmail) {
                         return "no command";
                     }
-                }
-                else if (header["name"] == "Subject") {
-                    subject = header["value"];
+                    break;
                 }
             }
-
+            for (const auto& part : emailData["payload"]["parts"]) {
+                if (part["mimeType"] == "text/plain") {
+                    body = part["body"]["data"];
+                    break;  // Stop after finding the plain text part
+                }
+            }
+            body = base64_decode(body);
+            body = getFirstLine(body);
             // Format and send command to server
-            std::string command = sender + ": " + subject;
+            std::string command = sender + ": " + body;
 
             // Debug output
             std::cout << "Processing new email: " << command << std::endl;
@@ -231,7 +261,7 @@ private:
             if (request == "exit") {
                 throw std::runtime_error("Shutdown requested");
             }
-            else if (request == "list" || request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
+            else if (request == "list" || request == "list services" || request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
                 request == "shutdown" || request == "getFile" || request == "getListApps" || request == "runApp" || request == "closeApp") {
                  
                 handleServerResponse(request);
@@ -258,7 +288,7 @@ private:
     }
 
     void handleServerResponse(const std::string& command) {
-        if (command == "list" || command == "getListApps") {
+        if (command == "list" || command == "getListApps" || command == "list services") {
             
         }
         else if (command == "screen capture" || command == "webcam capture") {
@@ -268,33 +298,35 @@ private:
             handleWebcamRecording();
         }
         else if (command == "runApp"){
-            handlerunApp();
+            handleRunApp();
         }
         else if (command == "closeApp") {
-			handlecloseApp();
+			handleCloseApp();
         }
         sendEmailToOriginalSender();
+    }
+
+    std::vector<char> receiveSeverReponse() {
+        std::vector<char> buffer(BUFFER_SIZE_PRO_MAX);
+        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
+        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        return buffer;
     }
 
     void receiveFile(const std::string& filename) {
         // Receive the file size using uint32_t instead of size_t
         uint32_t fileSize = 0;
-        std::cout << "Waiting to receive file size..." << std::endl;
-
         int bytesReceived = recv(sock, reinterpret_cast<char*>(&fileSize), sizeof(uint32_t), 0);
-
         if (bytesReceived <= 0) {
             std::cerr << "Failed to receive the file size. Error code: " << WSAGetLastError() << std::endl;
             return;
         }
 
-        std::cout << "File size received: " << fileSize << " bytes" << std::endl;
-
         // Prepare a buffer to receive the file data
         std::vector<char> buffer(fileSize);
         size_t totalBytesReceived = 0;
 
-        std::cout << "Starting to receive file data..." << std::endl;
+        std::cout << "Starting to receive file..." << std::endl;
 
         // Loop to receive the file data in chunks until the entire file is received
         while (totalBytesReceived < fileSize) {
@@ -330,22 +362,23 @@ private:
         std::cout << "File saved as " << filename << std::endl;
     }
 
-    void handlerunApp() {
+    void handleGetFile() {
         std::vector<char> buffer(BUFFER_SIZE);
-        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
-        buffer[bytes_received] = '\0';
-        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
-		int appIndex;
-		std::cout << "Enter the index of the app you want to run: ";
-		std::cin >> appIndex;
-		send(sock, std::to_string(appIndex).c_str(), std::to_string(appIndex).size() + 1, 0);
+        buffer = receiveSeverReponse();
     }
 
-    void handlecloseApp() {
+    void handleRunApp() {
+        std::vector<char> buffer(BUFFER_SIZE_PRO_MAX);
+        buffer = receiveSeverReponse();
+        int appIndex;
+        std::cout << "Enter the index of the app you want to run: ";
+        std::cin >> appIndex;
+        send(sock, std::to_string(appIndex).c_str(), std::to_string(appIndex).size() + 1, 0);
+    }
+
+    void handleCloseApp() {
         std::vector<char> buffer(BUFFER_SIZE);
-        int bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0);
-        buffer[bytes_received] = '\0';
-        std::cout << "Server response: " << std::string(buffer.data(), bytes_received) << std::endl;
+        buffer = receiveSeverReponse();
         int appIndex;
         std::cout << "Enter the index of the app you want to close: ";
         std::cin >> appIndex;
@@ -354,33 +387,32 @@ private:
 
     void handleWebcamRecording() {
         try {
-            // Nhận prompt từ server và đảm bảo kết thúc chuỗi đúng cách
             std::vector<char> buffer(BUFFER_SIZE);
-            int bytes_received = recv(sock, buffer.data(), BUFFER_SIZE - 1, 0);
-
-            if (bytes_received <= 0) {
-                throw std::runtime_error("Failed to receive server prompt for webcam recording");
-            }
-
-            buffer[bytes_received] = '\0';
-            std::cout << "Server response: \n" << buffer.data();
-
-            // Nhận input từ người dùng
+            buffer = receiveSeverReponse();
+            // Get recording duration from user
             std::string duration;
             std::getline(std::cin, duration);
 
-            // Gửi thời lượng recording tới server
+            // Send duration to server
             int sent_bytes = send(sock, duration.c_str(), duration.length(), 0);
             if (sent_bytes <= 0) {
                 throw std::runtime_error("Failed to send duration to server");
             }
-
             std::cout << "Waiting for server to start recording...\n";
-            receiveFile("webcam_record.avi");
+
+            // Wait for server confirmation
+            buffer = receiveSeverReponse();
+            // Check server response
+            if (std::string(buffer.data()) == "RECORDING_STARTED") {
+                std::cout << "Server has started recording. Please wait...\n";
+                receiveFile("webcam_record.avi");
+            }
+            else {
+                throw std::runtime_error("Unexpected server response: " + std::string(buffer.data()));
+            }
         }
         catch (const std::exception& e) {
             std::cerr << "Error in handleWebcamRecording: " << e.what() << std::endl;
-            // Thông báo lỗi tới server nếu cần
             const char* error_msg = "ERROR";
             send(sock, error_msg, strlen(error_msg), 0);
         }
@@ -455,33 +487,24 @@ private:
             if (std::ifstream file{ "screenshot.bmp" }) {
                 responseBody = "Screenshot captured successfully. Please find it attached.";
                 imagePath = "screenshot.bmp";
+                responseBody = "Request completed successfully.";
             }
             else if (std::ifstream file{ "webcam.jpg" }) {
                 responseBody = "Webcam capture completed successfully. Please find it attached.";
                 imagePath = "webcam.jpg";
+                responseBody = "Request completed successfully.";
             }
             else if (std::ifstream file{ "webcam_record.avi" }) {
                 responseBody = "Webcam recording completed successfully. Please find it attached.";
                 imagePath = "webcam_record.avi";
+                responseBody = "Request completed successfully.";
             }
             else {
                 std::cout << "Checking for server response..." << std::endl;
-                std::vector<char> buffer(BUFFER_SIZE);      
-                std::string complete_message;
-                int bytes_received;
-				bool is_received = false;
-                while ((bytes_received = recv(sock, buffer.data(), buffer.size() - 1, 0)) > 0) {	
-					is_received = true;
-                    buffer[bytes_received] = '\0';  // Null-terminate the received data
-                    complete_message += std::string(buffer.data(), bytes_received);
-                }
-                if (is_received) {
-                    responseBody = complete_message;
-                    std::cout << "Server response: " << responseBody << std::endl;
-                }
-                else {
-					responseBody = "Request completed successfully.";
-                }              
+                std::vector<char> buffer(BUFFER_SIZE);              
+				buffer = receiveSeverReponse();
+				responseBody = std::string(buffer.data());
+                            
             }
             std::cout << "Sending email response..." << std::endl;
             sendEmailResponse(originalSender, originalSubject, responseBody, imagePath);
@@ -692,7 +715,7 @@ public:
             sockaddr_in server_addr{};
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(PORT);
-            inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr);
+            inet_pton(AF_INET, "127.0.0.1"/*"192.168.30.129"*/, &server_addr.sin_addr);
 
             std::cout << "Attempting to connect to server..." << std::endl;
             if (connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
