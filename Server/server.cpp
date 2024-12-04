@@ -39,13 +39,9 @@ void sendData(SOCKET new_socket, const std::string& data) {
 void handleSendFile(const std::string& file_path, SOCKET new_socket) {
     std::ifstream file(file_path, std::ios::binary);
     if (file) {
-        // Determine the size of the file
-        file.seekg(0, std::ios::end);
-        // Sử dụng uint32_t thay vì size_t
+        file.seekg(0, std::ios::end);      
         uint32_t fileSize = static_cast<uint32_t>(file.tellg());
         file.seekg(0, std::ios::beg);
-
-        // Send the file size
         if (send(new_socket, reinterpret_cast<const char*>(&fileSize), sizeof(uint32_t), 0) < 0) {
             std::cerr << "Failed to send file size. Error: " << WSAGetLastError() << std::endl;
             file.close();
@@ -181,14 +177,7 @@ void CaptureWebcamImage(const std::string& file_path) {
     cap.release();
 }
 bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_seconds) {
-    // Mở webcam (0 là chỉ số của webcam mặc định)
     cv::VideoCapture cap(0);
-
-    // Kiểm tra nếu không mở được webcam
-    if (!cap.isOpened()) {
-        std::cout << "Cannot open the webcam" << std::endl;
-        return false;
-    }
 
     // Lấy kích thước và FPS của video từ webcam
     int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
@@ -213,30 +202,23 @@ bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_secon
 
     for (int i = 0; i < total_frames; ++i) {
         cap >> frame;  // Lấy một frame từ webcam
-
         if (frame.empty()) {
             std::cout << "Failed to capture image" << std::endl;
             break;
         }
-
         // Ghi frame vào video
         video.write(frame);
-
         // Hiển thị frame cho mục đích xem trực tiếp
         cv::imshow("Webcam", frame);
-
         // Thoát nếu nhấn phím 'q' trong khi quay video
         if (cv::waitKey(30) == 'q') {
             std::cout << "Stopping video recording." << std::endl;
             break;
         }
     }
-
-    // Giải phóng tài nguyên
     cap.release();
     video.release();
     cv::destroyAllWindows();
-
     return true;
 }
 // Hàm lấy danh sách dịch vụ
@@ -348,7 +330,7 @@ void handleGetServices(SOCKET new_socket) {
     // Send the services list to client
     sendData(new_socket, services_str);
 }
-// Hàm lấy danh sách ứng dụng đã cài đặt
+
 std::vector<std::wstring> getInstalledApps() {
     std::vector<std::wstring> app_list;
 
@@ -380,6 +362,7 @@ std::vector<std::wstring> getInstalledApps() {
 
     return app_list;
 }
+
 // Hàm chạy ứng dụng
 void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
     if (appIndex < 0 || appIndex >= app_list.size()) {
@@ -387,19 +370,24 @@ void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
         return;
     }
 
-    const std::wstring& appInfo = app_list[appIndex];
+    const std::wstring& appInfo = app_list[appIndex+1];
     size_t separatorPos = appInfo.find(L" - ");
     if (separatorPos == std::wstring::npos) {
         std::wcout << L"Invalid application information." << std::endl;
         return;
     }
 
-    std::wstring appPath = appInfo.substr(separatorPos + 3);
+    std::wstring appPathWithParams = appInfo.substr(separatorPos + 3);
 
     // Remove any surrounding quotes if present
-    if (appPath.front() == L'"' && appPath.back() == L'"') {
-        appPath = appPath.substr(1, appPath.length() - 2);
+    if (appPathWithParams.front() == L'"' && appPathWithParams.back() == L'"') {
+        appPathWithParams = appPathWithParams.substr(1, appPathWithParams.length() - 2);
     }
+
+    // Separate the path and parameters
+    size_t paramPos = appPathWithParams.find(L' ');
+    std::wstring appPath = appPathWithParams.substr(0, paramPos);
+    std::wstring parameters = (paramPos != std::wstring::npos) ? appPathWithParams.substr(paramPos + 1) : L"";
 
     // Verify the executable exists
     if (GetFileAttributes(appPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
@@ -414,7 +402,7 @@ void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
     ShExecInfo.hwnd = NULL;
     ShExecInfo.lpVerb = L"runas";  // Request elevation
     ShExecInfo.lpFile = appPath.c_str();
-    ShExecInfo.lpParameters = L"";
+    ShExecInfo.lpParameters = parameters.c_str();
     ShExecInfo.lpDirectory = NULL;
     ShExecInfo.nShow = SW_SHOW;
     ShExecInfo.hInstApp = NULL;
@@ -435,7 +423,7 @@ void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
         }
     }
 }
-// Function to close an application by its process name
+
 bool CloseApplication(const std::wstring& executablePath) {
     // Extract executable name from path
     size_t lastBackslash = executablePath.find_last_of(L"\\");
@@ -599,14 +587,14 @@ int main() {
         std::string sender = "";
         std::string request = "";
         if (delimiterPos != std::string::npos) {
-            sender = message.substr(0, delimiterPos); // Extract sender
-            request = message.substr(delimiterPos + 2); // Extract request
+            sender = message.substr(0, delimiterPos); // tách sender
+            request = message.substr(delimiterPos + 2); // tách request
         }
         else {
             std::cout << "Invalid command!" << std::endl;
             continue;
         }
-        //std::string request = buffer;
+        
 		// Gửi danh sách các lệnh có thể thực thi
         if (request == "list") {
             const char* available_commands =
@@ -627,15 +615,19 @@ int main() {
             std::cout << "Sent list of available commands to client." << std::endl;
         }
 
+        // Xử lý lệnh list services
 		else if (request == "list services") {
             handleGetServices(new_socket);
-            std::cout << "Sent list of Windows services to client." << std::endl;			
+            std::cout << "Sent list of services to client." << std::endl;			
 		}
         
+        else if (request == "stop service") {
+            //handleStopService();
+        }
         // Xử lý lệnh exit
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
-            break; // Thoát vòng lặp khi client gửi lệnh "exit"
+            break;
         }
 
         // Xử lý lệnh shutdown
@@ -652,17 +644,14 @@ int main() {
 
 		// Xử lý lệnh screen capture
         else if (request == "screen capture") {
-            // Chụp ảnh từ màn hình và lưu vào file
-            TakeScreenshot("D:\\Hp\\Pictures\\Screenshots\\screenshot.bmp");       
-			handleSendFile("D:\\Hp\\Pictures\\Screenshots\\screenshot.bmp", new_socket);
+            TakeScreenshot("screenshot.bmp");       
+			handleSendFile("screenshot.bmp", new_socket);
         }
 
         // Xử lý lệnh webcam capture
 		else if (request == "webcam capture") {
-
-			// Chụp ảnh từ webcam và lưu vào file
-			CaptureWebcamImage("D:\\Hp\\Pictures\\Screenshots\\webcam_image.jpg");
-			handleSendFile("D:\\Hp\\Pictures\\Screenshots\\webcam_image.jpg", new_socket);
+			CaptureWebcamImage("webcam_image.jpg");
+			handleSendFile("webcam_image.jpg", new_socket);
 		}
 
 		// Xử lý lệnh webcam record
@@ -682,15 +671,15 @@ int main() {
             timeBuffer[time_received] = '\0';
             int duration = std::stoi(timeBuffer);
 
-            // Quay video và lưu thành file
-            RecordVideoFromWebcam("D:\\Hp\\Videos\\webcam_video.avi", duration);
-            // Gửi video cho client
-            handleSendFile("D:\\Hp\\Videos\\webcam_video.avi", new_socket);
+            RecordVideoFromWebcam("webcam_video.avi", duration);
+			std::string response = "ok";
+            send(new_socket, "ok", response.size() + 1, 0);
+            handleSendFile("webcam_video.avi", new_socket);
         }
 
         // Xử lý lệnh getFile
         else if (request == "getFile") {
-            std::string prompt = "Enter the file path: ";
+            std::string prompt = "Enter file name: ";
             send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
             recv(new_socket, buffer, BUFFER_SIZE, 0);
             std::string filepath(buffer);
@@ -724,16 +713,17 @@ int main() {
 
         // Xử lý lệnh runApp
         else if (request == "runApp") {
-			std::vector<std::wstring> app_list = getInstalledApps();
+            std::vector<std::wstring> app_list = getInstalledApps();
 
 			// Gửi danh sách ứng dụng cho client
 			std::string app_list_str = "Choose an app to run:\n";
 			for (int i = 0; i < app_list.size(); ++i) {
-				app_list_str += std::to_string(i) + ". " + std::string(app_list[i].begin(), app_list[i].end()) + "\n";
+				app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
 			}
 			send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
 
 			// Nhận chỉ số ứng dụng từ client
+            std::cout << "Waiting app index from client...\n";
 			char appIndexBuffer[10];
 			int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
 			if (appIndexReceived <= 0) {
@@ -752,10 +742,11 @@ int main() {
             std::vector<std::wstring> app_list = getInstalledApps();
             handleCloseApp(app_list, new_socket);
         }
+
 		// Xử lý các lệnh không hợp lệnh
         else {
             send(new_socket, response, strlen(response), 0);
-            std::cout << "No valid" << std::endl;
+            std::cout << "No valid request" << std::endl;
         }
     }
 

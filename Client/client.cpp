@@ -53,7 +53,7 @@ std::string base64_decode(const std::string& in) {
     }
     int val = 0, valb = -8;
     for (unsigned char c : in) {
-        if (T[c] == -1) break;  // Ignore padding '='
+        if (T[c] == -1) break; 
         val = (val << 6) + T[c];
         valb += 6;
         if (valb >= 0) {
@@ -71,7 +71,6 @@ std::string getFirstLine(const std::string& str) {
     return result;
 }
 
-
 class GmailClient {
 private:
     static constexpr int PORT = 8080;
@@ -83,6 +82,7 @@ private:
     std::string refreshToken;
     std::string accessToken;
     std::string ownEmail;
+    std::string senderEmail;
     std::set<std::string> processedIds;
     std::chrono::system_clock::time_point lastCheckTime;
     SOCKET sock;
@@ -175,21 +175,19 @@ private:
             for (const auto& part : emailData["payload"]["parts"]) {
                 if (part["mimeType"] == "text/plain") {
                     body = part["body"]["data"];
-                    break;  // Stop after finding the plain text part
+                    break; 
                 }
             }
             body = base64_decode(body);
             body = getFirstLine(body);
-            // Format and send command to server
+           
             std::string command = sender + ": " + body;
-
-            // Debug output
             std::cout << "Processing new email: " << command << std::endl;
-
             send(sock, command.c_str(), command.length(), 0);
 
             std::cout << "Command sent to server: " << command << std::endl;
             std::cout << "---" << std::endl;
+            this->senderEmail = sender;
             return command;
         }
         catch (const std::exception& e) {
@@ -245,57 +243,48 @@ private:
     }
 
     void handleServerCommand(const std::string& command) {
-        try {      
-            // Extract the request part after ": "
-            std::string request = "invalid";
-            size_t colonPos = command.find(": ");
-            if (colonPos != std::string::npos && colonPos + 2 < command.length()) {
-                request = command.substr(colonPos + 2); // +2 to skip ": "
-            }
-            else if (command == "invalid" || command == "no command") {
-                request = command;
-            }
-
-            std::cout << "Parsed request: " << request << std::endl;  // Debug output
-            // Handle the extracted request
-            if (request == "exit") {
-                throw std::runtime_error("Shutdown requested");
-            }
-            else if (request == "list" || request == "list services" || request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
-                request == "shutdown" || request == "getFile" || request == "getListApps" || request == "runApp" || request == "closeApp") {
-                 
-                handleServerResponse(request);
-                              
-            }
-            else if (request == "no command") {
-                // Do nothing for "no command"
-                return;
-            }
-            else if (request == "invalid") {
-                // Do nothing for "invalid"
-                return;
-            }
-            else {
-                std::cout << "Invalid command: " << request << std::endl;
-            }
+        std::string request = "invalid";
+        size_t colonPos = command.find(": ");
+        if (colonPos != std::string::npos && colonPos + 2 < command.length()) {
+            request = command.substr(colonPos + 2);
         }
-        catch (const std::bad_alloc& e) {
-            std::cout << "Memory allocation error: " << e.what() << std::endl;
+        else if (command == "invalid" || command == "no command") {
+            request = command;
         }
-        catch (const std::exception& e) {
-            std::cout << "Error in handleServerCommand: " << e.what() << std::endl;
+        std::cout << "Parsed request: " << request << std::endl;
+        if (request == "exit") {
+            throw std::runtime_error("Shutdown requested");
+        }
+        else if (request == "list" || request == "list services" || request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
+            request == "shutdown" || request == "getFile" || request == "getListApps" || request == "runApp" || request == "closeApp") {
+            handleServerResponse(request);
+        }
+        else if (request == "no command" || request == "invalid") {
+            return;
+        }
+        else {
+            std::cout << "Invalid command: " << request << std::endl;
         }
     }
 
     void handleServerResponse(const std::string& command) {
-        if (command == "list" || command == "getListApps" || command == "list services") {
-            
+        std::string filePath = "";
+        if (command == "list" || command == "getListApps" || command == "list services") {           
         }
-        else if (command == "screen capture" || command == "webcam capture") {
-            receiveFile(command == "screen capture" ? "screenshot.bmp" : "webcam.jpg");
+        else if (command == "screen capture") {
+			filePath = "screenshot.bmp";
+            receiveFile("screenshot.bmp");
+        }
+        else if (command == "webcam capture") {
+			filePath = "webcam.jpg";
+			receiveFile("webcam.jpg");
         }
         else if (command == "webcam record") {
+            filePath = "webcam_record.avi";
             handleWebcamRecording();
+        }
+        else if (command == "getFile") {
+			filePath = handleGetFile();
         }
         else if (command == "runApp"){
             handleRunApp();
@@ -303,7 +292,7 @@ private:
         else if (command == "closeApp") {
 			handleCloseApp();
         }
-        sendEmailToOriginalSender();
+        sendEmailToOriginalSender(filePath);
     }
 
     std::vector<char> receiveSeverReponse() {
@@ -314,7 +303,6 @@ private:
     }
 
     void receiveFile(const std::string& filename) {
-        // Receive the file size using uint32_t instead of size_t
         uint32_t fileSize = 0;
         int bytesReceived = recv(sock, reinterpret_cast<char*>(&fileSize), sizeof(uint32_t), 0);
         if (bytesReceived <= 0) {
@@ -325,20 +313,14 @@ private:
         // Prepare a buffer to receive the file data
         std::vector<char> buffer(fileSize);
         size_t totalBytesReceived = 0;
-
         std::cout << "Starting to receive file..." << std::endl;
 
-        // Loop to receive the file data in chunks until the entire file is received
         while (totalBytesReceived < fileSize) {
             size_t remainingBytes = fileSize - totalBytesReceived;
             size_t chunkSize = (remainingBytes < BUFFER_SIZE) ? remainingBytes : BUFFER_SIZE;
 
             int bytes = recv(sock, buffer.data() + totalBytesReceived,
                 static_cast<int>(chunkSize), 0);
-            if (bytes <= 0) {
-                std::cerr << "Failed to receive file data. Error code: " << WSAGetLastError() << std::endl;
-                return;
-            }
             totalBytesReceived += bytes;
         }
 
@@ -347,29 +329,30 @@ private:
         // Save the file to disk
         std::ofstream outFile(filename, std::ios::binary);
         if (!outFile) {
-            std::cerr << "Failed to open file for writing: " << filename << std::endl;
-            //std::cerr << "Error: " << strerror(errno) << std::endl;
+            std::cerr << "Failed to open file for writing" << std::endl;
             return;
         }
         outFile.write(buffer.data(), fileSize);
         outFile.close();
-
-        if (!outFile) {
-            std::cerr << "Error occurred while writing file" << std::endl;
-            return;
-        }
-
         std::cout << "File saved as " << filename << std::endl;
     }
 
-    void handleGetFile() {
+    std::string handleGetFile() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
+
+        std::string filename;
+		std::cout << "Enter the filename you want to get: ";
+		getline(std::cin, filename);
+		send(sock, filename.c_str(), filename.size() + 1, 0);
+		receiveFile(filename);
+		return filename;
     }
 
     void handleRunApp() {
         std::vector<char> buffer(BUFFER_SIZE_PRO_MAX);
         buffer = receiveSeverReponse();
+		sendEmailResponse(this->senderEmail, std::string(buffer.data()));
         int appIndex;
         std::cout << "Enter the index of the app you want to run: ";
         std::cin >> appIndex;
@@ -386,43 +369,26 @@ private:
     }
 
     void handleWebcamRecording() {
-        try {
-            std::vector<char> buffer(BUFFER_SIZE);
-            buffer = receiveSeverReponse();
-            // Get recording duration from user
-            std::string duration;
-            std::getline(std::cin, duration);
+        std::vector<char> buffer(BUFFER_SIZE);
+        buffer = receiveSeverReponse();
+        
+        std::string duration;
+        std::getline(std::cin, duration);
+        int sent_bytes = send(sock, duration.c_str(), duration.length(), 0);
+        std::cout << "Waiting for server to start recording...\n";
 
-            // Send duration to server
-            int sent_bytes = send(sock, duration.c_str(), duration.length(), 0);
-            if (sent_bytes <= 0) {
-                throw std::runtime_error("Failed to send duration to server");
-            }
-            std::cout << "Waiting for server to start recording...\n";
-
-            // Wait for server confirmation
-            buffer = receiveSeverReponse();
-            // Check server response
-            if (std::string(buffer.data()) == "RECORDING_STARTED") {
-                std::cout << "Server has started recording. Please wait...\n";
-                receiveFile("webcam_record.avi");
-            }
-            else {
-                throw std::runtime_error("Unexpected server response: " + std::string(buffer.data()));
-            }
+        buffer = receiveSeverReponse();
+        if (std::string(buffer.data()) == "ok") {        
+            receiveFile("webcam_record.avi");
         }
-        catch (const std::exception& e) {
-            std::cerr << "Error in handleWebcamRecording: " << e.what() << std::endl;
-            const char* error_msg = "ERROR";
-            send(sock, error_msg, strlen(error_msg), 0);
+        else {
+            throw std::runtime_error("Unexpected server response: " + std::string(buffer.data()));
         }
     }
     
-    void sendEmailToOriginalSender() {
+    void sendEmailToOriginalSender(std::string filePath) {
         try {
             std::cout << "Starting sendEmailToOriginalSender..." << std::endl;
-
-            // Check for processed emails
             if (processedIds.empty()) {
                 std::cout << "No processed IDs found, returning..." << std::endl;
                 return;
@@ -440,79 +406,22 @@ private:
                 std::cerr << "JSON parsing error: " << e.what() << "\nResponse: " << messageResponse << std::endl;
                 return;
             }
-
-            std::string originalSender;
-            std::string originalSubject;
-            bool foundSender = false;
-            bool foundSubject = false;
-
-            // Extract original sender and subject with logging
-            if (emailData.contains("payload") &&
-                emailData["payload"].is_object() &&
-                emailData["payload"].contains("headers") &&
-                emailData["payload"]["headers"].is_array()) {             
-
-                for (const auto& header : emailData["payload"]["headers"]) {
-                    if (!header.is_object() || !header.contains("name") || !header.contains("value")) {
-                        continue;
-                    }
-
-                    std::string headerName = header["name"];
-                    if (headerName == "From") {
-                        originalSender = header["value"];
-                        size_t start = originalSender.find('<');
-                        size_t end = originalSender.find('>');
-                        if (start != std::string::npos && end != std::string::npos) {
-                            originalSender = originalSender.substr(start + 1, end - start - 1);
-                        }
-                        foundSender = true;                       
-                    }
-                    else if (headerName == "Subject") {
-                        originalSubject = "Re: " + std::string(header["value"]);
-                        foundSubject = true;                     
-                    }
-                }
-            }
-
-            if (!foundSender || !foundSubject) {
-                std::cerr << "Failed to find sender or subject in email headers" << std::endl;
-                return;
-            }
-
-            // Create response body based on operation type
+      
+            std::string sender = this->senderEmail;
             std::string responseBody;
-            std::string imagePath = "";
-
-            // Check if we have image files to send
-            if (std::ifstream file{ "screenshot.bmp" }) {
-                responseBody = "Screenshot captured successfully. Please find it attached.";
-                imagePath = "screenshot.bmp";
+ 
+			if (filePath != "") {
                 responseBody = "Request completed successfully.";
-            }
-            else if (std::ifstream file{ "webcam.jpg" }) {
-                responseBody = "Webcam capture completed successfully. Please find it attached.";
-                imagePath = "webcam.jpg";
-                responseBody = "Request completed successfully.";
-            }
-            else if (std::ifstream file{ "webcam_record.avi" }) {
-                responseBody = "Webcam recording completed successfully. Please find it attached.";
-                imagePath = "webcam_record.avi";
-                responseBody = "Request completed successfully.";
-            }
-            else {
+			}
+            else{
                 std::cout << "Checking for server response..." << std::endl;
-                std::vector<char> buffer(BUFFER_SIZE);              
-				buffer = receiveSeverReponse();
-				responseBody = std::string(buffer.data());
-                            
-            }
+                std::vector<char> buffer(BUFFER_SIZE);
+                buffer = receiveSeverReponse();
+                responseBody = std::string(buffer.data());
+            }          
             std::cout << "Sending email response..." << std::endl;
-            sendEmailResponse(originalSender, originalSubject, responseBody, imagePath);
+            sendEmailResponse(sender, responseBody, filePath);
             std::cout << "Email response sent successfully" << std::endl;
-            // Clean up the file after sending
-            if (!imagePath.empty()) {
-                std::remove(imagePath.c_str());
-            }
         }
         catch (const json::exception& e) {
             std::cerr << "JSON error in sendEmailToOriginalSender: " << e.what() << std::endl;
@@ -532,18 +441,14 @@ private:
         if (!file) {
             throw std::runtime_error("Cannot open file: " + filepath);
         }
-
-        // Read file into buffer
         std::vector<char> buffer(std::istreambuf_iterator<char>(file), {});
         file.close();
-
         return base64_encode(std::string(buffer.begin(), buffer.end()));
     }
     std::string createMultipartMessage(const std::string& recipientEmail,
         const std::string& subject,
         const std::string& body,
-        const std::string& videoPath) {
-        // Generate boundary
+        const std::string& filePath) {       
         std::string boundary = "boundary" + std::to_string(std::rand());
 
         std::string message;
@@ -563,7 +468,7 @@ private:
         message += "--" + boundary + "\r\n";
 
         // Detect video mime type based on extension
-        std::string extension = videoPath.substr(videoPath.find_last_of(".") + 1);
+        std::string extension = filePath.substr(filePath.find_last_of(".") + 1);
         std::string mimeType = "video/mp4"; // default
         if (extension == "avi") mimeType = "video/x-msvideo";
         else if (extension == "mov") mimeType = "video/quicktime";
@@ -572,13 +477,13 @@ private:
         message += "Content-Type: " + mimeType + "\r\n";
         message += "Content-Transfer-Encoding: base64\r\n";
         message += "Content-Disposition: attachment; filename=\"" +
-            videoPath.substr(videoPath.find_last_of("/\\") + 1) + "\"\r\n\r\n";
+            filePath.substr(filePath.find_last_of("/\\") + 1) + "\"\r\n\r\n";
 
         // Read and encode video in chunks
         const size_t CHUNK_SIZE = 1024 * 1024; // 1MB chunks
-        std::ifstream file(videoPath, std::ios::binary);
+        std::ifstream file(filePath, std::ios::binary);
         if (!file) {
-            throw std::runtime_error("Cannot open video file: " + videoPath);
+            throw std::runtime_error("Cannot open video file: " + filePath);
         }
 
         std::vector<char> buffer(CHUNK_SIZE);
@@ -591,23 +496,19 @@ private:
             }
         }
         file.close();
-
-        // End boundary
         message += "--" + boundary + "--\r\n";
-
         return message;
     }
-    void sendEmailResponse(const std::string& recipientEmail, const std::string& subject,
-        const std::string& body, const std::string& filePath = "") {
+    void sendEmailResponse(const std::string& recipientEmail, const std::string& body, const std::string& filePath = "") {
         try {
+            std::string subject = "";
             std::string url = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
             std::string rawMessage;
 
             if (!filePath.empty() && std::ifstream(filePath).good()) {
                 rawMessage = createMultipartMessage(recipientEmail, subject, body, filePath);
             }
-            else {
-                // Simple text message without attachment
+            else {              
                 rawMessage = "MIME-Version: 1.0\r\n"
                     "From: me\r\n"
                     "To: " + recipientEmail + "\r\n"
@@ -657,9 +558,8 @@ private:
         catch (const std::exception& e) {
             std::cerr << "Error in sendEmailResponse: " << e.what() << std::endl;
             refreshAccessToken();
-            // Retry once after token refresh
             try {
-                sendEmailResponse(recipientEmail, subject, body, filePath);
+                sendEmailResponse(recipientEmail, body, filePath);
             }
             catch (const std::exception& retry_error) {
                 throw std::runtime_error("Failed to send email after token refresh: " +
@@ -667,15 +567,14 @@ private:
             }
         }
     }
-    static int ProgressCallback(void* clientp,
-        double dltotal, double dlnow,
-        double ultotal, double ulnow) {
+    static int ProgressCallback(void* clientp, double dltotal, double dlnow, double ultotal, double ulnow) {
         if (ultotal > 0) {
             double progress = (ulnow / ultotal) * 100;
             std::cout << "Upload progress: " << static_cast<int>(progress) << "%" << std::endl;
         }
         return 0;
     }
+
 public:
     GmailClient(const std::string& clientId, const std::string& clientSecret,
         const std::string& refreshToken, const std::string& ownEmail)
