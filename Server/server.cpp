@@ -1,3 +1,6 @@
+
+#define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
+
 #include <iostream>
 #include <winsock2.h> 
 #include <fstream>    
@@ -15,6 +18,7 @@
 #include <gdiplus.h>
 #include <cstdio>
 #include <winsvc.h>
+#include<string>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
@@ -332,96 +336,39 @@ void handleGetServices(SOCKET new_socket) {
 }
 
 std::vector<std::wstring> getInstalledApps() {
-    std::vector<std::wstring> app_list;
-
-    std::wstring command =
-        L"Get-ItemProperty -Path \"HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\","
-        L"\"HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\","
-        L"\"HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*\" |"
-        L" Where-Object {$_.DisplayName -ne $null} | Select-Object -ExpandProperty DisplayName";
-
-    std::wstring powershellCommand = L"powershell.exe -Command \"" + command + L"\"";
-
-    FILE* pipe = _wpopen(powershellCommand.c_str(), L"r");
-    if (!pipe) {
-        std::wcerr << L"Failed to run PowerShell command." << std::endl;
-        return app_list;
-    }
-
-    wchar_t buffer[256];
-    int index = 1;
-    while (fgetws(buffer, 256, pipe)) {
-        std::wstring app = buffer;
-        app.erase(app.find_last_not_of(L"\r\n") + 1);
-        if (!app.empty()) {
-            app_list.push_back(std::to_wstring(index++) + L". " + app);
-        }
-    }
-
-    _pclose(pipe);
+    std::vector<std::wstring> app_list = { L"chrome",L"Word",L"Excel",L"Edge",L"Paint",L"Explorer",L"Notepad",L"Calculator",L"snipping tool",L"Power Point",L"camera" };
+    
 
     return app_list;
 }
-
+std::vector<LPCWSTR>getCommand() {
+    std::vector<LPCWSTR>app_Command = { L"chrome.exe",L"winword.exe",L"excel.exe",L"msedge.exe",L"mspaint.exe",L"explorer.exe",L"notepad.exe",L"calc.exe",L"snippingtool.exe",L"powerpnt.exe" ,L"microsoft.windows.camera"};
+    return app_Command;
+}
 // Hàm chạy ứng dụng
-void runApp(const std::vector<std::wstring>& app_list, int appIndex) {
-    if (appIndex < 0 || appIndex >= app_list.size()) {
-        std::wcout << L"Invalid app index." << std::endl;
-        return;
-    }
-
-    const std::wstring& appInfo = app_list[appIndex+1];
-    size_t separatorPos = appInfo.find(L" - ");
-    if (separatorPos == std::wstring::npos) {
-        std::wcout << L"Invalid application information." << std::endl;
-        return;
-    }
-
-    std::wstring appPathWithParams = appInfo.substr(separatorPos + 3);
-
-    // Remove any surrounding quotes if present
-    if (appPathWithParams.front() == L'"' && appPathWithParams.back() == L'"') {
-        appPathWithParams = appPathWithParams.substr(1, appPathWithParams.length() - 2);
-    }
-
-    // Separate the path and parameters
-    size_t paramPos = appPathWithParams.find(L' ');
-    std::wstring appPath = appPathWithParams.substr(0, paramPos);
-    std::wstring parameters = (paramPos != std::wstring::npos) ? appPathWithParams.substr(paramPos + 1) : L"";
-
-    // Verify the executable exists
-    if (GetFileAttributes(appPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        std::wcout << L"Executable not found: " << appPath << std::endl;
-        return;
-    }
-
-    // Use ShellExecuteEx with "runas" verb to handle elevation
-    SHELLEXECUTEINFO ShExecInfo = { 0 };
-    ShExecInfo.cbSize = sizeof(SHELLEXECUTEINFO);
-    ShExecInfo.fMask = SEE_MASK_NOCLOSEPROCESS;
-    ShExecInfo.hwnd = NULL;
-    ShExecInfo.lpVerb = L"runas";  // Request elevation
-    ShExecInfo.lpFile = appPath.c_str();
-    ShExecInfo.lpParameters = parameters.c_str();
-    ShExecInfo.lpDirectory = NULL;
-    ShExecInfo.nShow = SW_SHOW;
-    ShExecInfo.hInstApp = NULL;
-
-    if (ShellExecuteEx(&ShExecInfo)) {
-        std::wcout << L"Running application: " << appPath << std::endl;
-        if (ShExecInfo.hProcess) {
-            CloseHandle(ShExecInfo.hProcess);
-        }
-    }
-    else {
-        DWORD error = GetLastError();
-        if (error == ERROR_CANCELLED) {
-            std::wcout << L"User declined elevation request." << std::endl;
+bool runApp(const std::vector<std::wstring>& app_list, int appIndex) {
+    std::vector<LPCWSTR>AppCommand = getCommand();
+    if (appIndex >= 0 && appIndex < app_list.size()) {
+        HINSTANCE result = ShellExecute(
+            NULL,          // Handle tới cửa sổ (NULL nếu không cần)
+            L"open",       // Hành động (open, print, explore, ...)
+            AppCommand[appIndex], // Đường dẫn tới ứng dụng
+            NULL, // Tham số truyền vào ứng dụng (nếu có)
+            NULL,          // Thư mục làm việc (NULL = mặc định)
+            SW_SHOWNORMAL  // Hiển thị cửa sổ ứng dụng (SW_HIDE, SW_MINIMIZE, ...)
+        );
+        if ((int)result <= 32) {
+            std::wcerr << L"cannot start the application" << L"\n";
+            return false;
         }
         else {
-            std::wcout << L"Failed to run the application: " << appPath << L" (Error: " << error << L")" << std::endl;
+            std::wcout << L"successfully  start the application:  " << L"\n";
+            return true;
         }
-    }
+       
+}
+    return false;
+    
 }
 
 bool CloseApplication(const std::wstring& executablePath) {
@@ -615,7 +562,7 @@ int main() {
             std::cout << "Sent list of available commands to client." << std::endl;
         }
 
-        // Xử lý lệnh list services
+
 		else if (request == "list services") {
             handleGetServices(new_socket);
             std::cout << "Sent list of services to client." << std::endl;			
@@ -624,43 +571,41 @@ int main() {
         else if (request == "stop service") {
             //handleStopService();
         }
-        // Xử lý lệnh exit
+
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
             break;
         }
 
-        // Xử lý lệnh shutdown
+     
         else if (request == "shutdown") {
             std::cout << "Shutdown command received, shutting down..." << std::endl;
             ShutdownSystem();
         }
 
-        // Xử lý lệnh log in
+   
         else if (request == "log in") {}
 
-		// Xử lý lệnh log out
+
 		else if (request == "log out") {}
 
-		// Xử lý lệnh screen capture
+	
         else if (request == "screen capture") {
             TakeScreenshot("screenshot.bmp");       
 			handleSendFile("screenshot.bmp", new_socket);
         }
 
-        // Xử lý lệnh webcam capture
 		else if (request == "webcam capture") {
 			CaptureWebcamImage("webcam_image.jpg");
 			handleSendFile("webcam_image.jpg", new_socket);
 		}
 
-		// Xử lý lệnh webcam record
         else if (request == "webcam record") {
-            // Gửi yêu cầu nhập số giây muốn quay video
+   
             std::string prompt = "Enter the number of seconds to record: ";
             send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
             
-            // Nhận số giây từ client
+       
             std::cout << "Waiting duration from client...\n";
             char timeBuffer[10];
             int time_received = recv(new_socket, timeBuffer, sizeof(timeBuffer), 0);
@@ -677,7 +622,6 @@ int main() {
             handleSendFile("webcam_video.avi", new_socket);
         }
 
-        // Xử lý lệnh getFile
         else if (request == "getFile") {
             std::string prompt = "Enter file name: ";
             send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
@@ -687,7 +631,6 @@ int main() {
             handleSendFile(filepath, new_socket);       
         }
 
-        // Xử lý lệnh getListApps
         else if (request == "getListApps") {    
             std::vector<std::wstring> app_list = getInstalledApps();
             std::string app_list_str = "Installed applications:\n";
@@ -711,18 +654,17 @@ int main() {
 			std::cout << "Sent list of installed apps to client." << std::endl;
         }
 
-        // Xử lý lệnh runApp
         else if (request == "runApp") {
             std::vector<std::wstring> app_list = getInstalledApps();
 
-			// Gửi danh sách ứng dụng cho client
+
 			std::string app_list_str = "Choose an app to run:\n";
 			for (int i = 0; i < app_list.size(); ++i) {
-				app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
+				app_list_str += std::to_string(i)+ std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
 			}
 			send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
 
-			// Nhận chỉ số ứng dụng từ client
+
             std::cout << "Waiting app index from client...\n";
 			char appIndexBuffer[10];
 			int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
@@ -733,24 +675,30 @@ int main() {
 			appIndexBuffer[appIndexReceived] = '\0';
 			int appIndex = std::stoi(appIndexBuffer);
 
-			// Chạy ứng dụng
-			runApp(app_list, appIndex);
+
+			bool Check = runApp(app_list, appIndex);
+            if (Check) {
+                const char* MESS = "successfully start application ";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+            else {
+                const char* MESS = "cannot start application ";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
         }
-        
-        // Xử lý lệnh closeApp
+
         else if (request == "closeApp") {
             std::vector<std::wstring> app_list = getInstalledApps();
             handleCloseApp(app_list, new_socket);
         }
 
-		// Xử lý các lệnh không hợp lệnh
         else {
             send(new_socket, response, strlen(response), 0);
             std::cout << "No valid request" << std::endl;
         }
     }
 
-    // 8. Đóng kết nối
+
     closesocket(new_socket);
     closesocket(server_socket);
     WSACleanup();
