@@ -16,11 +16,7 @@
 #include <memory>
 #include <vector>
 
-#pragma comment(lib, "Normaliz.lib")
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "Wldap32.lib")
-#pragma comment(lib, "Crypt32.lib")
-#pragma comment(lib, "advapi32.lib")
+
 
 using json = nlohmann::json;
 const int BUFFER_SIZE = 1024;
@@ -287,6 +283,7 @@ private:
 			filePath = handleGetFile();
         }
         else if (command == "runApp"){
+            filePath = "RunApp";
             handleRunApp();
         }
         else if (command == "closeApp") {
@@ -357,6 +354,15 @@ private:
         std::cout << "Enter the index of the app you want to run: ";
         std::cin >> appIndex;
         send(sock, std::to_string(appIndex).c_str(), std::to_string(appIndex).size() + 1, 0);
+        char RESULT[100];
+        int ByteReceived = recv(sock, RESULT, 100, 0);
+        if (ByteReceived > 0) {
+            std::cout << RESULT << std::endl;
+        }
+        else {
+            std::cout << " ERROR" << std::endl;
+        }
+        
     }
 
     void handleCloseApp() {
@@ -584,7 +590,7 @@ public:
         refreshAccessToken();
         initializeSocket();
     }
-    //Ip máy ảo: 192.168.30.129
+    //IP may ao
     void initializeSocket() {
         try {
             std::cout << "Initializing socket..." << std::endl;

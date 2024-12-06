@@ -108,12 +108,13 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>"D:\Hp\Documents\University\Nam 2\HK3\MMT\Project\Client\builds\x64 Debug\include"</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>"$(ProjectDir)\builds\x64 Debug\include"</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>Normaliz.lib;Ws2_32.lib;Wldap32.lib;Crypt32.lib;advapi32.lib;"D:\Hp\Documents\University\Nam 2\HK3\MMT\Project\Client\builds\x64 Debug\lib\libcurl_a_debug.lib";%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>"Normaliz.lib";"Ws2_32.lib";"Wldap32.lib";"Crypt32.lib";"advapi32.lib";"$(ProjectDir)\\builds\x64 Debug\lib\libcurl_a_debug.lib";%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
