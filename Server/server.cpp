@@ -76,13 +76,12 @@ void handleSendFile(const std::string& file_path, SOCKET new_socket) {
         std::cerr << "Failed to open file." << std::endl;
     }
 }
-// Các hàm chức năng
-// Hàm tắt máy
-void ShutdownSystem() {
-    // EWX_SHUTDOWN: Tắt máy
-    // EWX_FORCE: Buộc các ứng dụng đóng mà không cảnh báo người dùng
-    if (!ExitWindowsEx(EWX_SHUTDOWN | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER)) {
-        std::cout << "Shutdown failed. Error: " << GetLastError() << std::endl;
+// Hàm xóa file
+bool handleDeleteFile(const std::string& fileName) {
+    std::string filePath = "./list file/" + fileName;
+    // Thực hiện xóa file
+    if (std::filesystem::remove(filePath)) {
+        return true;
     }
     else {
         std::cout << "System is shutting down..." << std::endl;
