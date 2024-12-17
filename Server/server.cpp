@@ -1,4 +1,3 @@
-
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 
 #include <iostream>
@@ -9,6 +8,7 @@
 #include <windows.h>
 #include <opencv2/opencv.hpp> 
 #include <opencv2/highgui/highgui.hpp>
+#include <opencv2/core/utils/logger.hpp>
 #include <opencv2/imgcodecs.hpp> 
 #include <psapi.h>
 #include <locale>
@@ -19,11 +19,11 @@
 #include <cstdio>
 #include <winsvc.h>
 #include<string>
+#include <filesystem>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Advapi32.lib")
-
 #define PORT 8080
 const int BUFFER_SIZE = 1024;
 
@@ -40,10 +40,37 @@ void sendData(SOCKET new_socket, const std::string& data) {
         totalSent += sent;
     }
 }
-void handleSendFile(const std::string& file_path, SOCKET new_socket) {
-    std::ifstream file(file_path, std::ios::binary);
+// Các hàm chức năng
+// Hàm tắt máy
+void ShutdownSystem() {
+    if (!ExitWindowsEx(EWX_SHUTDOWN | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER)) {
+        std::cout << "Shutdown failed. Error: " << GetLastError() << std::endl;
+    }
+    else {
+        std::cout << "System is shutting down..." << std::endl;
+    }
+}
+
+// Hàm lấy danh sách file
+std::vector<std::string> getFileList(const std::string& directory = "./list file") {
+    std::vector<std::string> fileList;
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+            if (entry.is_regular_file()) {
+                fileList.push_back(entry.path().filename().string());
+            }
+        }
+    }
+    catch (const std::filesystem::filesystem_error& e) {
+        std::cerr << "Error accessing directory: " << e.what() << std::endl;
+    }
+    return fileList;
+}
+// Hàm lấy file
+void handleSendFile(const std::string& filePath, SOCKET new_socket) {
+    std::ifstream file(filePath, std::ios::binary);
     if (file) {
-        file.seekg(0, std::ios::end);      
+        file.seekg(0, std::ios::end);
         uint32_t fileSize = static_cast<uint32_t>(file.tellg());
         file.seekg(0, std::ios::beg);
         if (send(new_socket, reinterpret_cast<const char*>(&fileSize), sizeof(uint32_t), 0) < 0) {
@@ -52,7 +79,6 @@ void handleSendFile(const std::string& file_path, SOCKET new_socket) {
             return;
         }
 
-        // Rest of the code remains the same
         char* buffer = new char[fileSize];
         file.read(buffer, fileSize);
 
@@ -84,10 +110,12 @@ bool handleDeleteFile(const std::string& fileName) {
         return true;
     }
     else {
-        std::cout << "System is shutting down..." << std::endl;
+        std::cerr << "File not found or could not be deleted: " << filePath << std::endl;
+        return false;
     }
 }
 
+// Hàm chụp ảnh
 class GdiplusInitializer {
 public:
     GdiplusInitializer() {
@@ -100,7 +128,6 @@ public:
 private:
     ULONG_PTR gdiplusToken;
 };
-// Hàm chụp ảnh
 void SaveScreenshotToJPG(const std::wstring& file_path, ULONG quality = 90) {
     // Khởi tạo GDI+
     GdiplusInitializer gdiplusInit;
@@ -159,12 +186,10 @@ void SaveScreenshotToJPG(const std::wstring& file_path, ULONG quality = 90) {
     ReleaseDC(NULL, screenDC);
 }
 void TakeScreenshot(const std::string& file_path, ULONG quality = 90) {
-    // Chuyển đổi string sang wstring
     std::wstring wide_path(file_path.begin(), file_path.end());
     SaveScreenshotToJPG(wide_path, quality);
 }
-void CaptureWebcamImage(const std::string& file_path) {
-   
+void CaptureWebcamImage(const std::string& file_path) {  
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
         std::cerr << "Error: Could not open webcam." << std::endl;
@@ -179,15 +204,15 @@ void CaptureWebcamImage(const std::string& file_path) {
     cv::imwrite(file_path, frame);
     cap.release();
 }
-bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_seconds) {
+
+ //Hàm quay video webcam
+bool recordVideo(const std::string& output_file, int duration_in_seconds) {
+    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
     cv::VideoCapture cap(0);
 
-    // Lấy kích thước và FPS của video từ webcam
     int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
     int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
     int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
-
-    // Định nghĩa codec và tạo đối tượng VideoWriter để lưu video
     cv::VideoWriter video(output_file,
         cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
         fps,
@@ -199,7 +224,7 @@ bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_secon
     }
 
     cv::Mat frame;
-    int total_frames = fps * duration_in_seconds; // Tổng số frame sẽ ghi dựa trên FPS và thời gian
+    int total_frames = fps * duration_in_seconds;
 
     std::cout << "Recording video for " << duration_in_seconds << " seconds..." << std::endl;
 
@@ -224,124 +249,16 @@ bool RecordVideoFromWebcam(const std::string& output_file, int duration_in_secon
     cv::destroyAllWindows();
     return true;
 }
-// Hàm lấy danh sách dịch vụ
-std::vector<std::wstring> getServicesList() {
-    std::vector<std::wstring> services_list;
-    SC_HANDLE scManager = OpenSCManager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
 
-    if (scManager == NULL) {
-        std::wcerr << L"Failed to open Service Control Manager. Error: " << GetLastError() << std::endl;
-        return services_list;
-    }
-
-    DWORD bytesNeeded = 0;
-    DWORD servicesReturned = 0;
-    DWORD resumeHandle = 0;
-
-    // First call to get required buffer size
-    EnumServicesStatusEx(
-        scManager,
-        SC_ENUM_PROCESS_INFO,
-        SERVICE_WIN32,
-        SERVICE_STATE_ALL,
-        NULL,
-        0,
-        &bytesNeeded,
-        &servicesReturned,
-        &resumeHandle,
-        NULL
-    );
-
-    if (bytesNeeded == 0) {
-        CloseServiceHandle(scManager);
-        return services_list;
-    }
-
-    // Allocate memory for services
-    LPBYTE lpServices = new BYTE[bytesNeeded];
-    ENUM_SERVICE_STATUS_PROCESS* services = (ENUM_SERVICE_STATUS_PROCESS*)lpServices;
-
-    // Second call to get actual data
-    if (EnumServicesStatusEx(
-        scManager,
-        SC_ENUM_PROCESS_INFO,
-        SERVICE_WIN32,
-        SERVICE_STATE_ALL,
-        lpServices,
-        bytesNeeded,
-        &bytesNeeded,
-        &servicesReturned,
-        &resumeHandle,
-        NULL
-    )) {
-        // Process each service
-        for (DWORD i = 0; i < servicesReturned; i++) {
-            std::wstring serviceName = services[i].lpServiceName;
-            std::wstring displayName = services[i].lpDisplayName;
-            std::wstring serviceStatus;
-
-            // Convert service status to string
-            switch (services[i].ServiceStatusProcess.dwCurrentState) {
-            case SERVICE_RUNNING:
-                serviceStatus = L"Running";
-                break;
-            case SERVICE_STOPPED:
-                serviceStatus = L"Stopped";
-                break;
-            case SERVICE_PAUSED:
-                serviceStatus = L"Paused";
-                break;
-            case SERVICE_START_PENDING:
-                serviceStatus = L"Starting";
-                break;
-            case SERVICE_STOP_PENDING:
-                serviceStatus = L"Stopping";
-                break;
-            case SERVICE_PAUSE_PENDING:
-                serviceStatus = L"Pausing";
-                break;
-            case SERVICE_CONTINUE_PENDING:
-                serviceStatus = L"Continuing";
-                break;
-            default:
-                serviceStatus = L"Unknown";
-            }
-
-            // Format service information
-            std::wstring serviceInfo = std::to_wstring(i + 1) + L". " +
-                displayName + L" (" + serviceName + L") - " +
-                serviceStatus;
-            services_list.push_back(serviceInfo);
-        }
-    }
-
-    delete[] lpServices;
-    CloseServiceHandle(scManager);
-    return services_list;
-}
-void handleGetServices(SOCKET new_socket) {
-    std::vector<std::wstring> services_list = getServicesList();
-
-    // Convert the list to string for sending
-    std::string services_str = "Windows Services:\n";
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-
-    for (const std::wstring& service : services_list) {
-        services_str += converter.to_bytes(service) + "\n";
-    }
-
-    // Send the services list to client
-    sendData(new_socket, services_str);
-}
-
-std::vector<std::wstring> getInstalledApps() {
-    std::vector<std::wstring> app_list = { L"chrome",L"Word",L"Excel",L"Edge",L"Paint",L"Explorer",L"Notepad",L"Calculator",L"snipping tool",L"Power Point",L"camera" };
-    
-
+// Hàm lấy danh sách ứng dụng
+std::vector<std::wstring> getListApps() {
+    std::vector<std::wstring> app_list = { L"1. Chrome",L"2. Word",L"3. Excel",L"4. Edge",L"5. Paint",L"6. Explorer",L"7. Notepad",
+                                            L"8. Calculator",L"9. Snipping tool",L"10. Power Point",L"11. Camera" };
     return app_list;
 }
 std::vector<LPCWSTR>getCommand() {
-    std::vector<LPCWSTR>app_Command = { L"chrome.exe",L"winword.exe",L"excel.exe",L"msedge.exe",L"mspaint.exe",L"explorer.exe",L"notepad.exe",L"calc.exe",L"snippingtool.exe",L"powerpnt.exe" ,L"microsoft.windows.camera"};
+    std::vector<LPCWSTR>app_Command = { L"chrome.exe",L"winword.exe",L"excel.exe",L"msedge.exe",L"mspaint.exe",L"explorer.exe",
+                                            L"notepad.exe",L"calc.exe",L"snippingtool.exe",L"powerpnt.exe" ,L"microsoft.windows.camera"};
     return app_Command;
 }
 // Hàm chạy ứng dụng
@@ -363,109 +280,244 @@ bool runApp(const std::vector<std::wstring>& app_list, int appIndex) {
         else {
             std::wcout << L"successfully  start the application:  " << L"\n";
             return true;
-        }
-       
-}
+        }       
+    }
     return false;
-    
 }
 
-bool CloseApplication(const std::wstring& executablePath) {
-    // Extract executable name from path
-    size_t lastBackslash = executablePath.find_last_of(L"\\");
-    std::wstring executableName = (lastBackslash != std::wstring::npos) ?
-        executablePath.substr(lastBackslash + 1) : executablePath;
-
-    bool processFound = false;
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snapshot == INVALID_HANDLE_VALUE) {
-        std::wcout << L"Failed to create process snapshot." << std::endl;
+// Hàm dừng ứng dụng
+bool stopApp(const std::wstring& appName) {
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) {
+        std::wcerr << L"Failed to create process snapshot.\n";
         return false;
     }
 
-    PROCESSENTRY32W processEntry;
-    processEntry.dwSize = sizeof(processEntry);
+    PROCESSENTRY32 pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    bool isStopped = false;
 
-    // Iterate through all processes
-    if (Process32FirstW(snapshot, &processEntry)) {
+    if (Process32First(hSnapshot, &pe32)) {
         do {
-            if (_wcsicmp(processEntry.szExeFile, executableName.c_str()) == 0) {
-                HANDLE processHandle = OpenProcess(PROCESS_TERMINATE, FALSE, processEntry.th32ProcessID);
-                if (processHandle != NULL) {
-                    if (TerminateProcess(processHandle, 0)) {
-                        processFound = true;
-                        std::wcout << L"Successfully terminated process: " << executableName << std::endl;
+            // So sánh tên tiến trình
+            if (_wcsicmp(pe32.szExeFile, appName.c_str()) == 0) {
+                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pe32.th32ProcessID);
+                if (hProcess) {
+                    if (TerminateProcess(hProcess, 0)) {
+                        std::wcout << L"Successfully terminated: " << appName << L"\n";
+                        isStopped = true;
                     }
                     else {
-                        std::wcout << L"Failed to terminate process: " << executableName <<
-                            L" (Error: " << GetLastError() << L")" << std::endl;
+                        std::wcerr << L"Failed to terminate: " << appName << L"\n";
                     }
-                    CloseHandle(processHandle);
+                    CloseHandle(hProcess);
                 }
+                break;
             }
-        } while (Process32NextW(snapshot, &processEntry));
+        } while (Process32Next(hSnapshot, &pe32));
     }
 
-    CloseHandle(snapshot);
+    CloseHandle(hSnapshot);
+    return isStopped;
+}
+std::vector<std::wstring> getRunningApps(const std::vector<LPCWSTR>& appCommands) {
+    std::set<std::wstring> uniqueApps;
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) {
+        std::wcerr << L"Failed to create process snapshot.\n";
+        return {};
+    }
+    PROCESSENTRY32 pe32;
+    pe32.dwSize = sizeof(PROCESSENTRY32);
 
-    if (!processFound) {
-        std::wcout << L"No running process found for: " << executableName << std::endl;
+    if (Process32First(hSnapshot, &pe32)) {
+        do {
+            for (const auto& command : appCommands) {
+                if (_wcsicmp(pe32.szExeFile, command) == 0) {
+                    uniqueApps.insert(pe32.szExeFile); 
+                    break;
+                }
+            }
+        } while (Process32Next(hSnapshot, &pe32));
+    }
+    CloseHandle(hSnapshot);
+    return std::vector<std::wstring>(uniqueApps.begin(), uniqueApps.end());
+}
+void handleStopApp(SOCKET new_socket) {
+    std::vector<LPCWSTR> appCommands = getCommand();
+    std::vector<std::wstring> runningFilteredApps = getRunningApps(appCommands);
+    std::wstring response = L"List of running applications:\n";
+    for (size_t i = 0; i < runningFilteredApps.size(); ++i) {
+        response += std::to_wstring(i+1) + L". " + runningFilteredApps[i] + L"\n";
+    }
+    response += L"Choose app to stop:";
+    send(new_socket, (char*)response.c_str(), response.size() * sizeof(wchar_t), 0);
+    char buffer[10];
+    int received = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
+    if (received <= 0) {
+        std::cerr << "Failed to receive index from client.\n";
+        return;
+    }
+    buffer[received] = '\0';
+    int appIndex = std::stoi(buffer);
+    if (appIndex < 0 || appIndex >= runningFilteredApps.size()) {
+        std::cerr << "Invalid app index received.\n";
+        return;
+    }
+    if (stopApp(runningFilteredApps[appIndex-1])) {
+        std::wstring successMsg = L"Application stopped successfully.\n";
+        send(new_socket, (char*)successMsg.c_str(), successMsg.size() * sizeof(wchar_t), 0);
+        std::cout << "Stop app successfully.\n";
+    }
+    else {
+        std::wstring failureMsg = L"Failed to stop the application.\n";
+        send(new_socket, (char*)failureMsg.c_str(), failureMsg.size() * sizeof(wchar_t), 0);
+    }
+}
+
+// Hàm lấy danh sách dịch vụ
+struct ServiceInfo {
+    std::wstring serviceName;  // Tên dịch vụ (Service Name)
+    std::wstring displayName; // Tên hiển thị (Display Name)
+    std::wstring status;      // Trạng thái (Running, Stopped, v.v.)
+};
+
+std::wstring serviceStatusToString(DWORD dwCurrentState) {
+    switch (dwCurrentState) {
+    case SERVICE_STOPPED: return L"Stopped";
+    case SERVICE_START_PENDING: return L"Starting...";
+    case SERVICE_STOP_PENDING: return L"Stopping...";
+    case SERVICE_RUNNING: return L"Running";
+    case SERVICE_CONTINUE_PENDING: return L"Continue Pending";
+    case SERVICE_PAUSE_PENDING: return L"Pause Pending";
+    case SERVICE_PAUSED: return L"Paused";
+    default: return L"Unknown";
+    }
+}
+
+std::vector<ServiceInfo> getServiceList() {
+    std::vector<ServiceInfo> serviceList;
+    SC_HANDLE hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
+    if (!hSCManager) {
+        std::wcerr << L"OpenSCManager failed. Error: " << GetLastError() << std::endl;
+        return serviceList;
+    }
+
+    DWORD bytesNeeded = 0;
+    DWORD servicesReturned = 0;
+    DWORD resumeHandle = 0;
+
+    EnumServicesStatusEx(
+        hSCManager,
+        SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,          // Chỉ lấy dịch vụ (không lấy driver)
+        SERVICE_STATE_ALL,      // Lấy tất cả dịch vụ (đang chạy và dừng)
+        NULL,
+        0,
+        &bytesNeeded,
+        &servicesReturned,
+        &resumeHandle,
+        NULL
+    );
+
+    std::vector<BYTE> buffer(bytesNeeded);
+    LPBYTE lpBuffer = buffer.data();
+
+    if (EnumServicesStatusEx(
+        hSCManager,
+        SC_ENUM_PROCESS_INFO,
+        SERVICE_WIN32,
+        SERVICE_STATE_ALL,
+        lpBuffer,
+        bytesNeeded,
+        &bytesNeeded,
+        &servicesReturned,
+        &resumeHandle,
+        NULL)) {
+        LPENUM_SERVICE_STATUS_PROCESS services = (LPENUM_SERVICE_STATUS_PROCESS)lpBuffer;
+        for (DWORD i = 0; i < servicesReturned; i++) {
+            ServiceInfo info;
+            info.serviceName = services[i].lpServiceName;
+            info.displayName = services[i].lpDisplayName;
+            info.status = serviceStatusToString(services[i].ServiceStatusProcess.dwCurrentState); // Thêm trạng thái
+            serviceList.push_back(info);
+        }
+    }
+    else {
+        std::wcerr << L"EnumServicesStatusEx failed. Error: " << GetLastError() << std::endl;
+    }
+    CloseServiceHandle(hSCManager);
+    return serviceList;
+}
+
+std::string getServiceListStr(const std::vector<ServiceInfo>& serviceList) {
+	std::string serviceListStr = "List of services:\n";
+	for (size_t i = 0; i < serviceList.size(); ++i) {
+		serviceListStr += std::to_string(i + 1) + ". " + std::string(serviceList[i].displayName.begin(), serviceList[i].displayName.end()) 
+            + " - " + std::string(serviceList[i].status.begin(), serviceList[i].status.end()) + "\n";
+	}
+	return serviceListStr;
+}
+// Hàm khởi động dịch vụ
+bool startService(const std::wstring& serviceName) {
+    SC_HANDLE hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!hSCManager) {
+        std::wcerr << L"OpenSCManager failed. Error: " << GetLastError() << std::endl;
         return false;
     }
 
+    SC_HANDLE hService = OpenService(hSCManager, serviceName.c_str(), SERVICE_START | SERVICE_QUERY_STATUS);
+    if (!hService) {
+        std::wcerr << L"OpenService failed. Error: " << GetLastError() << std::endl;
+        CloseServiceHandle(hSCManager);
+        return false;
+    }
+
+    if (!StartService(hService, 0, NULL)) {
+        std::wcerr << L"StartService failed. Error: " << GetLastError() << std::endl;
+    }
+
+    CloseServiceHandle(hService);
+    CloseServiceHandle(hSCManager);
     return true;
 }
-// Function to handle the closeApp command
-void handleCloseApp(const std::vector<std::wstring>& app_list, SOCKET new_socket) {
-    // Send list of running applications to client
-    std::string app_list_str = "Choose an app to close:\n";
-    for (int i = 0; i < app_list.size(); ++i) {
-        app_list_str += std::to_string(i) + ". " +
-            std::string(app_list[i].begin(), app_list[i].end()) + "\n";
-    }
-    send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
 
-    // Receive app index from client
-    char appIndexBuffer[10];
-    int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
-    if (appIndexReceived <= 0) {
-        std::cout << "Failed to receive app index from client." << std::endl;
-        return;
-    }
-    appIndexBuffer[appIndexReceived] = '\0';
-    int appIndex = std::stoi(appIndexBuffer);
+// Hàm tăt dịch vụ
+bool handleStopService(const std::wstring& serviceName) {
 
-    // Validate index
-    if (appIndex < 0 || appIndex >= app_list.size()) {
-        std::string error_msg = "Invalid app index.";
-        send(new_socket, error_msg.c_str(), error_msg.size() + 1, 0);
-        return;
+    SC_HANDLE hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
+    if (!hSCManager) {
+        std::wcerr << L"Không thể kết nối đến Service Control Manager. Lỗi: " << GetLastError() << std::endl;
+        return false;
     }
 
-    // Extract executable path
-    const std::wstring& appInfo = app_list[appIndex];
-    size_t separatorPos = appInfo.find(L" - ");
-    if (separatorPos == std::wstring::npos) {
-        std::string error_msg = "Invalid application information.";
-        send(new_socket, error_msg.c_str(), error_msg.size() + 1, 0);
-        return;
+    SC_HANDLE hService = OpenService(hSCManager, serviceName.c_str(), SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (!hService) {
+        std::wcerr << L"Không thể mở dịch vụ: " << serviceName << L". Lỗi: " << GetLastError() << std::endl;
+        CloseServiceHandle(hSCManager);
+        return false;
     }
 
-    std::wstring appPath = appInfo.substr(separatorPos + 3);
-    // Remove quotes if present
-    if (appPath.front() == L'"' && appPath.back() == L'"') {
-        appPath = appPath.substr(1, appPath.length() - 2);
+    SERVICE_STATUS serviceStatus;
+    if (ControlService(hService, SERVICE_CONTROL_STOP, &serviceStatus)) {
+        std::wcout << L"Dịch vụ " << serviceName << L" đang được dừng..." << std::endl;
+        Sleep(1000); // Đợi một chút để đảm bảo dịch vụ đã dừng
+    }
+    else {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_NOT_ACTIVE) {
+            std::wcout << L"Dịch vụ " << serviceName << L" đã tắt." << std::endl;
+        }
+        else {
+            std::wcerr << L"Không thể dừng dịch vụ. Lỗi: " << error << std::endl;
+        }
     }
 
-    // Try to close the application
-    bool success = CloseApplication(appPath);
-
-    // Send result to client
-    std::string result_msg = success ? "Application closed successfully." :
-        "Failed to close application.";
-    send(new_socket, result_msg.c_str(), result_msg.size() + 1, 0);
+    // Đóng handle
+    CloseServiceHandle(hService);
+    CloseServiceHandle(hSCManager);
+    return true;
 }
-
 
 int main() {
     WSADATA wsa;
@@ -514,7 +566,7 @@ int main() {
 
     // 7. Xử lý lệnh từ client
     while (true) {
-        memset(buffer, 0, sizeof(buffer)); // Xóa nội dung buffer trước khi nhận dữ liệu mới
+        memset(buffer, 0, sizeof(buffer));
         int recv_size = recv(new_socket, buffer, 1024, 0);
         if (recv_size == SOCKET_ERROR) {
             std::cout << "Recv failed: " << WSAGetLastError() << std::endl;
@@ -545,49 +597,32 @@ int main() {
         if (request == "list") {
             const char* available_commands =
                 "Available commands:\n"
-                "1. Shutdown PC\n"
-                "2. Restart PC\n"
-                "3. Log in pc\n"
-                "4. Log out pc\n"
-                "5. Screen capture\n"
-                "6. Webcam capture\n"
-                "7. Webcam record\n"
-                "8. Get file\n"
-                "9. Get list apps\n"
-                "10. Run app\n"
-                "11. Close app\n"
-                "12. List services\n";
+                "1. shutdown\n"
+                "2. screen capture\n"
+                "3. webcam capture\n"
+                "4. webcam record\n"
+				"5. list files\n"
+                "6. get file\n"
+                "7. delete file\n"
+                "8. list apps\n"
+                "9. start app\n"
+                "10. stop app\n"
+                "11. list services\n"
+                "12. start service\n"
+                "13. stopService\n";
             send(new_socket, available_commands, strlen(available_commands), 0);
             std::cout << "Sent list of available commands to client." << std::endl;
-        }
-
-
-		else if (request == "list services") {
-            handleGetServices(new_socket);
-            std::cout << "Sent list of services to client." << std::endl;			
-		}
-        
-        else if (request == "stop service") {
-            //handleStopService();
         }
 
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
             break;
         }
-
      
         else if (request == "shutdown") {
             std::cout << "Shutdown command received, shutting down..." << std::endl;
             ShutdownSystem();
         }
-
-   
-        else if (request == "log in") {}
-
-
-		else if (request == "log out") {}
-
 	
         else if (request == "screen capture") {
             TakeScreenshot("screenshot.bmp");       
@@ -600,10 +635,8 @@ int main() {
 		}
 
         else if (request == "webcam record") {
-   
             std::string prompt = "Enter the number of seconds to record: ";
-            send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
-            
+            send(new_socket, prompt.c_str(), prompt.size() + 1, 0);        
        
             std::cout << "Waiting duration from client...\n";
             char timeBuffer[10];
@@ -615,88 +648,181 @@ int main() {
             timeBuffer[time_received] = '\0';
             int duration = std::stoi(timeBuffer);
 
-            RecordVideoFromWebcam("webcam_video.avi", duration);
+            recordVideo("webcam_video.avi", duration);
 			std::string response = "ok";
             send(new_socket, "ok", response.size() + 1, 0);
             handleSendFile("webcam_video.avi", new_socket);
         }
 
-        else if (request == "getFile") {
-            std::string prompt = "Enter file name: ";
-            send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
-            recv(new_socket, buffer, BUFFER_SIZE, 0);
-            std::string filepath(buffer);
-            std::cout << "Request file from client: " << filepath << std::endl;
-            handleSendFile(filepath, new_socket);       
+        else if (request == "list files") {
+            std::vector<std::string> fileList = getFileList();
+            if (fileList.empty()) {
+                const char* MESS = "No files available.";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+            std::string fileListMessage = "Available files:\n";
+            for (size_t i = 0; i < fileList.size(); ++i) {
+                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+            }
+            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+			std::cout << "Sent list of files to client.\n";
         }
 
-        else if (request == "getListApps") {    
-            std::vector<std::wstring> app_list = getInstalledApps();
+        else if (request == "get file") {
+            std::vector<std::string> fileList = getFileList();
+            if (fileList.empty()) {
+                const char* MESS = "No files available to get.";
+                send(new_socket, MESS, strlen(MESS), 0);               
+            }
+            std::string fileListMessage = "Available files:\n";
+            for (size_t i = 0; i < fileList.size(); ++i) {
+                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+            }
+            fileListMessage += "Enter file index you want to get: ";
+            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+			recv(new_socket, buffer, BUFFER_SIZE, 0);
+			int fileIndex = atoi(buffer) - 1;
+			send(new_socket, fileList[fileIndex].c_str(), fileList[fileIndex].size() + 1, 0);
+			std::string filePath = "./list file/" + fileList[fileIndex];
+			handleSendFile(filePath, new_socket);
+            
+        }
+
+        else if (request == "delete file") {
+            std::vector<std::string> fileList = getFileList();
+            if (fileList.empty()) {
+                const char* MESS = "No files available to delete.";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }   
+            std::string fileListMessage = "Available files:\n";
+            for (size_t i = 0; i < fileList.size(); ++i) {
+                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+            }
+            fileListMessage += "Enter the file index to delete: ";
+            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+            recv(new_socket, buffer, BUFFER_SIZE, 0);
+            int fileIndex = atoi(buffer) - 1;
+            if (fileIndex < 0 || fileIndex >= static_cast<int>(fileList.size())) {
+                const char* MESS = "Invalid file number.";
+                send(new_socket, MESS, strlen(MESS), 0);           
+            }
+            else if (handleDeleteFile(fileList[fileIndex].c_str())) {
+				std::cout << "File deleted successfully." << std::endl;
+                const char* MESS = "File deleted successfully.";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+            else {
+				std::cout << "Failed to delete file." << std::endl;
+                const char* MESS = "Failed to delete file.";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+        }
+
+        else if (request == "list apps") {    
+            std::vector<std::wstring> app_list = getListApps();
             std::string app_list_str = "Installed applications:\n";
             std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
             for (const std::wstring& app : app_list) {
                 std::string app_str = converter.to_bytes(app);
                 app_list_str += app_str + "\n";
             }
-            size_t total_bytes_sent = 0;
-            size_t bytes_to_send = app_list_str.size() + 1;
-            const char* data = app_list_str.c_str();
-
-            while (total_bytes_sent < bytes_to_send) {
-                int bytes_sent = send(new_socket, data + total_bytes_sent, bytes_to_send - total_bytes_sent, 0);
-                if (bytes_sent == SOCKET_ERROR) {
-                    std::cerr << "Send failed with error: " << WSAGetLastError() << std::endl;
-                    break;
-                }
-                total_bytes_sent += bytes_sent;
-            }
+			sendData(new_socket, app_list_str);
 			std::cout << "Sent list of installed apps to client." << std::endl;
         }
 
-        else if (request == "runApp") {
-            std::vector<std::wstring> app_list = getInstalledApps();
-
-
+        else if (request == "start app") {
+            std::vector<std::wstring> app_list = getListApps();
 			std::string app_list_str = "Choose an app to run:\n";
 			for (int i = 0; i < app_list.size(); ++i) {
-				app_list_str += std::to_string(i)+ std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
+				app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
 			}
+            app_list_str += "Choose app to run:\n";
 			send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
-
-
             std::cout << "Waiting app index from client...\n";
 			char appIndexBuffer[10];
 			int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
 			if (appIndexReceived <= 0) {
 				std::cout << "Failed to receive app index from client." << std::endl;
 				break;
-			}
-			appIndexBuffer[appIndexReceived] = '\0';
+			}			
 			int appIndex = std::stoi(appIndexBuffer);
-
-
 			bool Check = runApp(app_list, appIndex);
             if (Check) {
-                const char* MESS = "successfully start application ";
+                const char* MESS = "Successfully start application ";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
             else {
-                const char* MESS = "cannot start application ";
+                const char* MESS = "Cannot start application ";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
         }
 
-        else if (request == "closeApp") {
-            std::vector<std::wstring> app_list = getInstalledApps();
-            handleCloseApp(app_list, new_socket);
+        else if (request == "stop app") {
+            handleStopApp(new_socket);
         }
 
+        else if (request == "list services") {
+            std::vector<ServiceInfo> serviceList = getServiceList();
+			std::string serviceList_str = getServiceListStr(serviceList);
+            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+            std::cout << "Sent list of services to client." << std::endl;
+            }
+
+        else if (request == "start service") {
+            std::vector<ServiceInfo> serviceList = getServiceList();
+			std::string serviceList_str = getServiceListStr(serviceList);
+			serviceList_str += "Choose service to start:";
+            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+            std::cout << "Waiting service index from client...\n";
+            char serviceIndexBuffer[10];
+            int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
+            if (serviceIndex<= 0) {
+                std::cout << "Failed to receive app index from client." << std::endl;
+                break;
+            }          
+            int idx = std::stoi(serviceIndexBuffer);
+            bool Check = startService(serviceList[idx-1].serviceName);
+            if (Check) {
+				std::cout << "Start service successfully\n";
+                std::string MESS = "Start service successfully";
+                send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
+            }
+            else {
+				std::cout << "Cannot start service\n";
+                std::string MESS = "Cannot start service";
+                send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
+            }         
+        }
+
+        else if (request == "stop service") {
+            std::vector<ServiceInfo> serviceList = getServiceList();
+			std::string serviceList_str = getServiceListStr(serviceList);
+            serviceList_str = "Choose service to stop:";
+            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+            std::cout << "Waiting service index from client...\n";
+            char serviceIndexBuffer[10];
+            int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
+            if (serviceIndex <= 0) {
+                std::cout << "Failed to receive app index from client." << std::endl;
+                break;
+            }
+            int idx = std::stoi(serviceIndexBuffer);
+            bool Check = startService(serviceList[idx-1].serviceName);
+            if (Check) {
+                const char* MESS = "Stop service successfully";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+            else {
+                const char* MESS = "Cannot start service";
+                send(new_socket, MESS, strlen(MESS), 0);
+            }
+        }
+    
         else {
             send(new_socket, response, strlen(response), 0);
             std::cout << "No valid request" << std::endl;
         }
     }
-
 
     closesocket(new_socket);
     closesocket(server_socket);

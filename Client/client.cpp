@@ -16,8 +16,6 @@
 #include <memory>
 #include <vector>
 
-
-
 using json = nlohmann::json;
 const int BUFFER_SIZE = 1024;
 
@@ -87,7 +85,6 @@ private:
         return size * nmemb;
     }
 
-private:
     std::string getQueryTime() const {
         auto now = std::chrono::system_clock::now();
         // Update lastCheckTime only after successfully processing messages
@@ -251,8 +248,11 @@ private:
         if (request == "exit") {
             throw std::runtime_error("Shutdown requested");
         }
-        else if (request == "list" || request == "list services" || request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
-            request == "shutdown" || request == "getFile" || request == "getListApps" || request == "runApp" || request == "closeApp") {
+        else if (request == "list" || request == "shutdown" ||
+            request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
+            request == "list files" || request == "get file" || request == "delete file" ||
+            request == "list apps" || request == "start app" || request == "stop app" ||
+            request == "list services" || request == "start service" || request == "stop service") {
             handleServerResponse(request);
         }
         else if (request == "no command" || request == "invalid") {
@@ -265,7 +265,7 @@ private:
 
     void handleServerResponse(const std::string& command) {
         std::string filePath = "";
-        if (command == "list" || command == "getListApps" || command == "list services") {           
+        if (command == "list" || command == "list apps" || command == "list services" || command == "list files") {
         }
         else if (command == "screen capture") {
 			filePath = "screenshot.bmp";
@@ -277,17 +277,28 @@ private:
         }
         else if (command == "webcam record") {
             filePath = "webcam_record.avi";
-            handleWebcamRecording();
+            handleRecordWebcam();
         }
-        else if (command == "getFile") {
+        else if (command == "get file") {
 			filePath = handleGetFile();
         }
-        else if (command == "runApp"){
-            filePath = "RunApp";
-            handleRunApp();
+        else if (command == "delete file") {
+            handleDeleteFile();
         }
-        else if (command == "closeApp") {
-			handleCloseApp();
+        else if (command == "start app"){
+            filePath = "RunApp";
+            handleStartApp();
+        }
+        else if (command == "stop app") {			
+			handleStopApp();
+        }
+        else if (command == "start service") {
+            filePath = "StartService";
+            handleStartService();
+        }
+        else if (command == "stop service") {
+			filePath = "StopService";
+            handleStopService();
         }
         sendEmailToOriginalSender(filePath);
     }
@@ -306,8 +317,6 @@ private:
             std::cerr << "Failed to receive the file size. Error code: " << WSAGetLastError() << std::endl;
             return;
         }
-
-        // Prepare a buffer to receive the file data
         std::vector<char> buffer(fileSize);
         size_t totalBytesReceived = 0;
         std::cout << "Starting to receive file..." << std::endl;
@@ -320,10 +329,7 @@ private:
                 static_cast<int>(chunkSize), 0);
             totalBytesReceived += bytes;
         }
-
         std::cout << "File received successfully." << std::endl;
-
-        // Save the file to disk
         std::ofstream outFile(filename, std::ios::binary);
         if (!outFile) {
             std::cerr << "Failed to open file for writing" << std::endl;
@@ -337,21 +343,28 @@ private:
     std::string handleGetFile() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
-
-        std::string filename;
-		std::cout << "Enter the filename you want to get: ";
-		getline(std::cin, filename);
-		send(sock, filename.c_str(), filename.size() + 1, 0);
+		int fileIndex;
+        std::cin >> fileIndex;
+        send(sock, std::to_string(fileIndex).c_str(), std::to_string(fileIndex).size() + 1, 0);
+		std::string filename;
+		recv(sock, buffer.data(), buffer.size() - 1, 0);
+		filename = std::string(buffer.data());
 		receiveFile(filename);
 		return filename;
     }
 
-    void handleRunApp() {
-        std::vector<char> buffer(BUFFER_SIZE_PRO_MAX);
+    void handleDeleteFile() {
+        std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
-		sendEmailResponse(this->senderEmail, std::string(buffer.data()));
+        int fileIndex;
+        std::cin >> fileIndex;
+        send(sock, std::to_string(fileIndex).c_str(), std::to_string(fileIndex).size() + 1, 0);
+    }
+
+    void handleStartApp() {
+        std::vector<char> buffer(BUFFER_SIZE);
+        buffer = receiveSeverReponse();
         int appIndex;
-        std::cout << "Enter the index of the app you want to run: ";
         std::cin >> appIndex;
         send(sock, std::to_string(appIndex).c_str(), std::to_string(appIndex).size() + 1, 0);
         char RESULT[100];
@@ -362,19 +375,48 @@ private:
         else {
             std::cout << " ERROR" << std::endl;
         }
-        
     }
 
-    void handleCloseApp() {
+    void handleStopApp() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
         int appIndex;
-        std::cout << "Enter the index of the app you want to close: ";
         std::cin >> appIndex;
         send(sock, std::to_string(appIndex).c_str(), std::to_string(appIndex).size() + 1, 0);
     }
 
-    void handleWebcamRecording() {
+    void handleStartService() {
+        std::vector<char> buffer(BUFFER_SIZE);
+        buffer = receiveSeverReponse();
+        int serviceIndex;
+        std::cin >> serviceIndex;
+        send(sock, std::to_string(serviceIndex).c_str(), std::to_string(serviceIndex).size() + 1, 0);
+        char RESULT[100];
+        int ByteReceived = recv(sock, RESULT, 100, 0);
+        if (ByteReceived > 0) {
+            std::cout << RESULT << std::endl;
+        }
+        else {
+            std::cout << " ERROR" << std::endl;
+        }
+    }
+
+    void handleStopService() {
+        std::vector<char> buffer(BUFFER_SIZE);
+        buffer = receiveSeverReponse();
+        int serviceIndex;
+        std::cin >> serviceIndex;
+        send(sock, std::to_string(serviceIndex).c_str(), std::to_string(serviceIndex).size() + 1, 0);
+        char RESULT[100];
+        int ByteReceived = recv(sock, RESULT, 100, 0);
+        if (ByteReceived > 0) {
+            std::cout << RESULT << std::endl;
+        }
+        else {
+            std::cout << " ERROR" << std::endl;
+        }
+    }
+    void handleRecordWebcam() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
         
@@ -417,10 +459,10 @@ private:
             std::string responseBody;
  
 			if (filePath != "") {
-                responseBody = "Request completed successfully.";
+                responseBody = "Request completed.";
 			}
             else{
-                std::cout << "Checking for server response..." << std::endl;
+                std::cout << "Waiting for server response..." << std::endl;
                 std::vector<char> buffer(BUFFER_SIZE);
                 buffer = receiveSeverReponse();
                 responseBody = std::string(buffer.data());
@@ -551,13 +593,10 @@ private:
                 // Enable progress callback for large uploads
                 curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
                 curl_easy_setopt(curl.get(), CURLOPT_PROGRESSFUNCTION, ProgressCallback);
-
                 CURLcode res = curl_easy_perform(curl.get());
-
                 if (res != CURLE_OK) {
                     throw std::runtime_error("CURL failed: " + std::string(curl_easy_strerror(res)));
                 }
-
                 curl_slist_free_all(headers);
             }
         }
@@ -590,7 +629,7 @@ public:
         refreshAccessToken();
         initializeSocket();
     }
-    //IP may ao
+    
     void initializeSocket() {
         try {
             std::cout << "Initializing socket..." << std::endl;
@@ -640,7 +679,7 @@ public:
             try {
                 std::string command = processNewEmails();
 				handleServerCommand(command);
-                std::this_thread::sleep_for(std::chrono::seconds(10));
+                std::this_thread::sleep_for(std::chrono::seconds(5));
             }
             catch (const std::runtime_error& e) {
                 if (std::string(e.what()) == "Shutdown requested") {
@@ -658,20 +697,14 @@ public:
 };
 
 int main() {
-    try {
-        GmailClient client(
-            "612933153793-1teill41m3i7t1qkit497uh6q8nkkhmc.apps.googleusercontent.com",
-            "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",
-            "1//04sP2Z68i9I7NCgYIARAAGAQSNwF-L9IrSEFQu8CWlFVcdWXH-1quABuTo-wMgwguTzaD4B5Z5mmBqGbEoiWGtxSOxpDySLMbVs4",
-            "quanphanpq147@gmail.com"
-        );
+    GmailClient client(
+        "612933153793-1teill41m3i7t1qkit497uh6q8nkkhmc.apps.googleusercontent.com",
+        "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",
+        "1//04sP2Z68i9I7NCgYIARAAGAQSNwF-L9IrSEFQu8CWlFVcdWXH-1quABuTo-wMgwguTzaD4B5Z5mmBqGbEoiWGtxSOxpDySLMbVs4",
+        "quanphanpq147@gmail.com"
+    );
 
-        client.run();
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
-        return 1;
-    }
+    client.run();
 
     return 0;
 }
