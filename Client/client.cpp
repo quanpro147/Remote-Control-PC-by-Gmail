@@ -16,9 +16,8 @@
 #include <memory>
 #include <vector>
 
+using namespace std;
 using json = nlohmann::json;
-const int BUFFER_SIZE = 1024;
-
 static const std::string base64_chars =
 "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 "abcdefghijklmnopqrstuvwxyz"
@@ -47,7 +46,7 @@ std::string base64_decode(const std::string& in) {
     }
     int val = 0, valb = -8;
     for (unsigned char c : in) {
-        if (T[c] == -1) break; 
+        if (T[c] == -1) break;
         val = (val << 6) + T[c];
         valb += 6;
         if (valb >= 0) {
@@ -64,7 +63,10 @@ std::string getFirstLine(const std::string& str) {
     }
     return result;
 }
-
+struct Sender {
+	string email;
+    bool isAllowed;
+};
 class GmailClient {
 private:
     static constexpr int PORT = 8080;
@@ -76,7 +78,8 @@ private:
     std::string refreshToken;
     std::string accessToken;
     std::string ownEmail;
-    std::string senderEmail;
+    vector<Sender> senders;
+    string currSender;
     std::set<std::string> processedIds;
     std::chrono::system_clock::time_point lastCheckTime;
     SOCKET sock;
@@ -87,17 +90,14 @@ private:
 
     std::string getQueryTime() const {
         auto now = std::chrono::system_clock::now();
-        // Update lastCheckTime only after successfully processing messages
         auto time_t = std::chrono::system_clock::to_time_t(lastCheckTime);
         std::tm tm_local;
 
-        #ifdef _WIN32
-                localtime_s(&tm_local, &time_t);
-        #else
-                localtime_r(&time_t, &tm_local);
-        #endif
-
-        // Format using Unix timestamp (epoch seconds)
+#ifdef _WIN32
+        localtime_s(&tm_local, &time_t);
+#else
+        localtime_r(&time_t, &tm_local);
+#endif
         std::ostringstream ss;
         ss << time_t;
         return ss.str();
@@ -106,27 +106,26 @@ private:
     std::string processNewEmails() {
         try {
             std::string queryTime = getQueryTime();
-            // Use Unix timestamp directly in the query
             std::string encodedQuery = "after:" + queryTime;
             std::string url = "https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q=" + encodedQuery;
 
             std::cout << "\n=== Checking for new emails ===\n";
 
             std::string response = makeGetRequest(url);
-            
+
             json messages = json::parse(response);
             std::string command = "no command";
 
-            if (messages.contains("messages") && messages["messages"].is_array()) {             
+            if (messages.contains("messages") && messages["messages"].is_array()) {
                 for (const auto& message : messages["messages"]) {
-                    std::string messageId = message["id"];                   
+                    std::string messageId = message["id"];
                     if (processedIds.find(messageId) == processedIds.end()) {
                         command = processMessage(messageId);
                         processedIds.insert(messageId);
-                        if (command != "no command") std::cout << "New message processed, command: " << command << std::endl;                       
-                    }                
+                        if (command != "no command") std::cout << "New message processed, command: " << command << std::endl;
+                    }
                 }
-            }   
+            }
             if (command == "no command") {
                 std::cout << "No new messages have found\n";
             }
@@ -157,8 +156,6 @@ private:
                     if (start != std::string::npos && end != std::string::npos) {
                         sender = sender.substr(start + 1, end - start - 1);
                     }
-
-                    // Skip if this email is from ourselves
                     if (sender == ownEmail) {
                         return "no command";
                     }
@@ -168,19 +165,41 @@ private:
             for (const auto& part : emailData["payload"]["parts"]) {
                 if (part["mimeType"] == "text/plain") {
                     body = part["body"]["data"];
-                    break; 
+                    break;
                 }
             }
             body = base64_decode(body);
             body = getFirstLine(body);
-           
+            senders.push_back({ sender, false });
+            currSender = sender;
+			if (body == "request access") {
+				for (int i = 0; i < senders.size(); i++) {
+					if (senders[i].email == sender) {
+						senders[i].isAllowed = true;
+						break;
+					}
+				}
+			}
+			else {
+				bool flag = false;
+				for (int i = 0; i < senders.size(); i++) {
+					if (senders[i].email == sender) {
+						if (senders[i].isAllowed) flag = true;
+						break;
+					}
+				}
+				if (flag == false) {
+					handleRejectedSender();
+					return "no command";
+				}
+
+            }
             std::string command = sender + ": " + body;
             std::cout << "Processing new email: " << command << std::endl;
             send(sock, command.c_str(), command.length(), 0);
 
             std::cout << "Command sent to server: " << command << std::endl;
             std::cout << "---" << std::endl;
-            this->senderEmail = sender;
             return command;
         }
         catch (const std::exception& e) {
@@ -188,7 +207,7 @@ private:
             return "invalid";
         }
     }
-  
+
     std::string makeGetRequest(const std::string& url) const {
         std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> curl(curl_easy_init(), curl_easy_cleanup);
         std::string response;
@@ -244,11 +263,11 @@ private:
         else if (command == "invalid" || command == "no command") {
             request = command;
         }
-        std::cout << "Parsed request: " << request << std::endl;
-        if (request == "exit") {
+        std::cout << "Request: " << request << std::endl;      
+		if (request == "exit") {
             throw std::runtime_error("Shutdown requested");
-        }
-        else if (request == "list" || request == "shutdown" ||
+        } 
+        else if (request == "list" || request == "shutdown" || request == "request access" || request == "history"||
             request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
             request == "list files" || request == "get file" || request == "delete file" ||
             request == "list apps" || request == "start app" || request == "stop app" ||
@@ -262,45 +281,48 @@ private:
             std::cout << "Invalid command: " << request << std::endl;
         }
     }
-
+    void handleRejectedSender() {
+        sendEmailResponse(currSender, "You do not have sufficient access rights.");
+    }
     void handleServerResponse(const std::string& command) {
         std::string filePath = "";
-        if (command == "list" || command == "list apps" || command == "list services" || command == "list files") {
+        if (command == "list" || command == "list apps" || command == "list services" || command == "list files" || command == "request access" || command == "history") {
         }
         else if (command == "screen capture") {
-			filePath = "screenshot.bmp";
+            filePath = "screenshot.bmp";
             receiveFile("screenshot.bmp");
         }
         else if (command == "webcam capture") {
-			filePath = "webcam.jpg";
-			receiveFile("webcam.jpg");
+            filePath = "webcam.jpg";
+            receiveFile("webcam.jpg");
         }
         else if (command == "webcam record") {
             filePath = "webcam_record.avi";
             handleRecordWebcam();
         }
         else if (command == "get file") {
-			filePath = handleGetFile();
+            filePath = handleGetFile();
         }
         else if (command == "delete file") {
             handleDeleteFile();
         }
-        else if (command == "start app"){
+        else if (command == "start app") {
             filePath = "RunApp";
             handleStartApp();
         }
-        else if (command == "stop app") {			
-			handleStopApp();
+        else if (command == "stop app") {
+            filePath = "StopApp";
+            handleStopApp();
         }
         else if (command == "start service") {
             filePath = "StartService";
             handleStartService();
         }
         else if (command == "stop service") {
-			filePath = "StopService";
+            filePath = "StopService";
             handleStopService();
         }
-        sendEmailToOriginalSender(filePath);
+        sendEmailToOriginalSender(filePath, currSender);
     }
 
     std::vector<char> receiveSeverReponse() {
@@ -343,14 +365,14 @@ private:
     std::string handleGetFile() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
-		int fileIndex;
+        int fileIndex;
         std::cin >> fileIndex;
         send(sock, std::to_string(fileIndex).c_str(), std::to_string(fileIndex).size() + 1, 0);
-		std::string filename;
-		recv(sock, buffer.data(), buffer.size() - 1, 0);
-		filename = std::string(buffer.data());
-		receiveFile(filename);
-		return filename;
+        std::string filename;
+        recv(sock, buffer.data(), buffer.size() - 1, 0);
+        filename = std::string(buffer.data());
+        receiveFile(filename);
+        return filename;
     }
 
     void handleDeleteFile() {
@@ -419,22 +441,22 @@ private:
     void handleRecordWebcam() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
-        
+
         std::string duration;
         std::getline(std::cin, duration);
         int sent_bytes = send(sock, duration.c_str(), duration.length(), 0);
         std::cout << "Waiting for server to start recording...\n";
 
         buffer = receiveSeverReponse();
-        if (std::string(buffer.data()) == "ok") {        
+        if (std::string(buffer.data()) == "ok") {
             receiveFile("webcam_record.avi");
         }
         else {
             throw std::runtime_error("Unexpected server response: " + std::string(buffer.data()));
         }
     }
-    
-    void sendEmailToOriginalSender(std::string filePath) {
+
+    void sendEmailToOriginalSender(string filePath, string currSender) {
         try {
             std::cout << "Starting sendEmailToOriginalSender..." << std::endl;
             if (processedIds.empty()) {
@@ -442,31 +464,31 @@ private:
                 return;
             }
 
-            std::string lastMessageId = *processedIds.rbegin();          
-            std::string messageUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + lastMessageId;           
+            std::string lastMessageId = *processedIds.rbegin();
+            std::string messageUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages/" + lastMessageId;
             std::string messageResponse = makeGetRequest(messageUrl);
-           
+
             json emailData;
             try {
-                emailData = json::parse(messageResponse);              
+                emailData = json::parse(messageResponse);
             }
             catch (const json::exception& e) {
                 std::cerr << "JSON parsing error: " << e.what() << "\nResponse: " << messageResponse << std::endl;
                 return;
             }
-      
-            std::string sender = this->senderEmail;
+
+            std::string sender = currSender;
             std::string responseBody;
- 
-			if (filePath != "") {
+
+            if (filePath != "") {
                 responseBody = "Request completed.";
-			}
-            else{
+            }
+            else {
                 std::cout << "Waiting for server response..." << std::endl;
                 std::vector<char> buffer(BUFFER_SIZE);
                 buffer = receiveSeverReponse();
                 responseBody = std::string(buffer.data());
-            }          
+            }
             std::cout << "Sending email response..." << std::endl;
             sendEmailResponse(sender, responseBody, filePath);
             std::cout << "Email response sent successfully" << std::endl;
@@ -481,7 +503,7 @@ private:
         }
         catch (...) {
             std::cerr << "Unknown error in sendEmailToOriginalSender" << std::endl;
-        }      
+        }
     }
 
     std::string readFileToBase64(const std::string& filepath) {
@@ -496,7 +518,7 @@ private:
     std::string createMultipartMessage(const std::string& recipientEmail,
         const std::string& subject,
         const std::string& body,
-        const std::string& filePath) {       
+        const std::string& filePath) {
         std::string boundary = "boundary" + std::to_string(std::rand());
 
         std::string message;
@@ -556,7 +578,7 @@ private:
             if (!filePath.empty() && std::ifstream(filePath).good()) {
                 rawMessage = createMultipartMessage(recipientEmail, subject, body, filePath);
             }
-            else {              
+            else {
                 rawMessage = "MIME-Version: 1.0\r\n"
                     "From: me\r\n"
                     "To: " + recipientEmail + "\r\n"
@@ -629,7 +651,7 @@ public:
         refreshAccessToken();
         initializeSocket();
     }
-    
+
     void initializeSocket() {
         try {
             std::cout << "Initializing socket..." << std::endl;
@@ -678,7 +700,7 @@ public:
         while (true) {
             try {
                 std::string command = processNewEmails();
-				handleServerCommand(command);
+                handleServerCommand(command);
                 std::this_thread::sleep_for(std::chrono::seconds(5));
             }
             catch (const std::runtime_error& e) {
@@ -705,6 +727,5 @@ int main() {
     );
 
     client.run();
-
     return 0;
 }

@@ -1,5 +1,5 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <iostream>
 #include <winsock2.h> 
 #include <fstream>    
@@ -20,12 +20,14 @@
 #include <winsvc.h>
 #include<string>
 #include <filesystem>
+#include "json.hpp"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Advapi32.lib")
 #define PORT 8080
 const int BUFFER_SIZE = 1024;
+using json = nlohmann::json;
 
 // Các hàm phụ
 void sendData(SOCKET new_socket, const std::string& data) {
@@ -519,6 +521,73 @@ bool handleStopService(const std::wstring& serviceName) {
     return true;
 }
 
+// Hàm lịch sử
+std::string getCurrentTimestamp() {
+    std::time_t now = std::time(nullptr);
+    char buf[80];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+    return std::string(buf);
+}
+
+// Hàm lưu request vào file JSON
+void saveRequestToFile(const std::string& clientName, const std::string& request) {
+    std::ifstream inFile("requests.json");
+    json requestData;
+
+    // Đọc dữ liệu từ file nếu tồn tại
+    if (inFile.is_open()) {
+        inFile >> requestData;
+        inFile.close();
+    }
+
+    // Tạo request mới
+    json newRequest = {
+        {"request", request},
+        {"timestamp", getCurrentTimestamp()}
+    };
+
+    // Thêm request vào danh sách của client
+    requestData[clientName].push_back(newRequest);
+
+    // Ghi lại vào file
+    std::ofstream outFile("requests.json");
+    if (outFile.is_open()) {
+        outFile << requestData.dump(4);
+        outFile.close();
+    }
+    else {
+        std::cerr << "Failed to open requests.json for writing!" << std::endl;
+    }
+}
+std::string getRequestHistory(const std::string& clientName) {
+    std::ifstream inFile("requests.json");
+    json requestData;
+    std::string history;
+
+    // Đọc dữ liệu từ file
+    if (inFile.is_open()) {
+        inFile >> requestData;
+        inFile.close();
+    }
+    else {
+        return "Failed to open requests.json for reading!";
+    }
+
+    // Kiểm tra xem client có tồn tại không
+    if (requestData.contains(clientName)) {
+        history += "Request history for " + clientName + ":\n";
+        for (const auto& req : requestData[clientName]) {
+            history += "- " + req["request"].get<std::string>() +
+                " (at " + req["timestamp"].get<std::string>() + ")\n";
+        }
+    }
+    else {
+        history = "No history found for client: " + clientName + "\n";
+    }
+
+    return history;
+}
+
 int main() {
     WSADATA wsa;
     SOCKET server_socket, new_socket;
@@ -592,7 +661,7 @@ int main() {
             std::cout << "Invalid command!" << std::endl;
             continue;
         }
-        
+        saveRequestToFile(sender, request);
 		// Gửi danh sách các lệnh có thể thực thi
         if (request == "list") {
             const char* available_commands =
@@ -601,7 +670,7 @@ int main() {
                 "2. screen capture\n"
                 "3. webcam capture\n"
                 "4. webcam record\n"
-				"5. list files\n"
+                "5. list files\n"
                 "6. get file\n"
                 "7. delete file\n"
                 "8. list apps\n"
@@ -609,7 +678,8 @@ int main() {
                 "10. stop app\n"
                 "11. list services\n"
                 "12. start service\n"
-                "13. stopService\n";
+                "13. stop service\n"
+                "14. history\n";
             send(new_socket, available_commands, strlen(available_commands), 0);
             std::cout << "Sent list of available commands to client." << std::endl;
         }
@@ -617,6 +687,12 @@ int main() {
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
             break;
+        }
+
+        else if (request == "request access") {
+			std::string response = "Access granted.";
+            send(new_socket, response.c_str(), response.size() + 1, 0);
+            std::cout << "Access granted from client.\n";
         }
      
         else if (request == "shutdown") {
@@ -817,7 +893,14 @@ int main() {
                 send(new_socket, MESS, strlen(MESS), 0);
             }
         }
-    
+        
+        else if (request == "history") {
+            std::string response = "Your request history:\n";
+			response += getRequestHistory(sender);
+			send(new_socket, response.c_str(), response.size() + 1, 0);
+			std::cout << "Sent request history to client.\n";
+        }
+
         else {
             send(new_socket, response, strlen(response), 0);
             std::cout << "No valid request" << std::endl;
