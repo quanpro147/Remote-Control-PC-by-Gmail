@@ -121,13 +121,9 @@ private:
                     std::string messageId = message["id"];
                     if (processedIds.find(messageId) == processedIds.end()) {
                         command = processMessage(messageId);
-                        processedIds.insert(messageId);
-                        if (command != "no command") std::cout << "New message processed, command: " << command << std::endl;
+                        processedIds.insert(messageId);                       
                     }
                 }
-            }
-            if (command == "no command") {
-                std::cout << "No new messages have found\n";
             }
             return command;
         }
@@ -170,41 +166,14 @@ private:
             }
             body = base64_decode(body);
             body = getFirstLine(body);
-            senders.push_back({ sender, false });
             currSender = sender;
-			if (body == "request access") {
-				for (int i = 0; i < senders.size(); i++) {
-					if (senders[i].email == sender) {
-						senders[i].isAllowed = true;
-						break;
-					}
-				}
-			}
-			else {
-				bool flag = false;
-				for (int i = 0; i < senders.size(); i++) {
-					if (senders[i].email == sender) {
-						if (senders[i].isAllowed) flag = true;
-						break;
-					}
-				}
-				if (flag == false) {
-					handleRejectedSender();
-					return "no command";
-				}
-
-            }
-            std::string command = sender + ": " + body;
-            std::cout << "Processing new email: " << command << std::endl;
-            send(sock, command.c_str(), command.length(), 0);
-
-            std::cout << "Command sent to server: " << command << std::endl;
-            std::cout << "---" << std::endl;
+            std::string command = sender + ": " + body;       
+            //send(sock, command.c_str(), command.length(), 0);
             return command;
         }
         catch (const std::exception& e) {
             std::cerr << "Error processing message " << messageId << ": " << e.what() << std::endl;
-            return "invalid";
+            return "no command";
         }
     }
 
@@ -254,41 +223,31 @@ private:
         accessToken = jsonData["access_token"];
     }
 
-    void handleServerCommand(const std::string& command) {
-        std::string request = "invalid";
+    void handleUserCommand(const std::string& command) {
+        std::string request;
         size_t colonPos = command.find(": ");
         if (colonPos != std::string::npos && colonPos + 2 < command.length()) {
             request = command.substr(colonPos + 2);
         }
-        else if (command == "invalid" || command == "no command") {
-            request = command;
+        else {
+            std::cout << "No new messages found\n";
+            return;
+            
         }
-        std::cout << "Request: " << request << std::endl;      
+		std::cout << "New message: " << command << std::endl;
+		send(sock, command.c_str(), command.length(), 0);
+		std::cout << "Command has been sent to server\n";
 		if (request == "exit") {
-            throw std::runtime_error("Shutdown requested");
+            throw std::runtime_error("Exit requested");
         } 
-        else if (request == "list" || request == "shutdown" || request == "request access" || request == "history"||
-            request == "screen capture" || request == "webcam capture" || request == "webcam record" ||
-            request == "list files" || request == "get file" || request == "delete file" ||
-            request == "list apps" || request == "start app" || request == "stop app" ||
-            request == "list services" || request == "start service" || request == "stop service") {
+        else {
             handleServerResponse(request);
         }
-        else if (request == "no command" || request == "invalid") {
-            return;
-        }
-        else {
-            std::cout << "Invalid command: " << request << std::endl;
-        }
     }
-    void handleRejectedSender() {
-        sendEmailResponse(currSender, "You do not have sufficient access rights.");
-    }
+
     void handleServerResponse(const std::string& command) {
         std::string filePath = "";
-        if (command == "list" || command == "list apps" || command == "list services" || command == "list files" || command == "request access" || command == "history") {
-        }
-        else if (command == "screen capture") {
+        if (command == "screen capture") {
             filePath = "screenshot.bmp";
             receiveFile("screenshot.bmp");
         }
@@ -304,6 +263,7 @@ private:
             filePath = handleGetFile();
         }
         else if (command == "delete file") {
+			filePath = "DeleteFile";
             handleDeleteFile();
         }
         else if (command == "start app") {
@@ -438,6 +398,7 @@ private:
             std::cout << " ERROR" << std::endl;
         }
     }
+
     void handleRecordWebcam() {
         std::vector<char> buffer(BUFFER_SIZE);
         buffer = receiveSeverReponse();
@@ -550,7 +511,7 @@ private:
             filePath.substr(filePath.find_last_of("/\\") + 1) + "\"\r\n\r\n";
 
         // Read and encode video in chunks
-        const size_t CHUNK_SIZE = 1024 * 1024; // 1MB chunks
+        const size_t CHUNK_SIZE = BUFFER_SIZE_PRO_MAX * BUFFER_SIZE_PRO_MAX;
         std::ifstream file(filePath, std::ios::binary);
         if (!file) {
             throw std::runtime_error("Cannot open video file: " + filePath);
@@ -609,7 +570,7 @@ private:
                 curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
 
                 // Increased timeout for large files
-                curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 300L); // 5 minutes timeout
+                curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 20L); // 5 minutes timeout
                 // Set buffer size for faster uploads
                 curl_easy_setopt(curl.get(), CURLOPT_BUFFERSIZE, 1024L * 1024L); // 1MB buffer
                 // Enable progress callback for large uploads
@@ -700,8 +661,8 @@ public:
         while (true) {
             try {
                 std::string command = processNewEmails();
-                handleServerCommand(command);
-                std::this_thread::sleep_for(std::chrono::seconds(5));
+                handleUserCommand(command);
+                std::this_thread::sleep_for(std::chrono::seconds(7));
             }
             catch (const std::runtime_error& e) {
                 if (std::string(e.what()) == "Shutdown requested") {

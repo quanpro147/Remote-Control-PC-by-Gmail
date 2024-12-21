@@ -15,6 +15,50 @@
         {
             "request": "history",
             "timestamp": "2024-12-20 16:05:32"
+        },
+        {
+            "request": "request access",
+            "timestamp": "2024-12-20 23:56:02"
+        },
+        {
+            "request": "wrong command",
+            "timestamp": "2024-12-20 23:56:33"
+        },
+        {
+            "request": "wtf",
+            "timestamp": "2024-12-20 23:57:43"
+        },
+        {
+            "request": "??",
+            "timestamp": "2024-12-20 23:58:46"
+        },
+        {
+            "request": "request access",
+            "timestamp": "2024-12-21 12:17:30"
+        },
+        {
+            "request": "request access",
+            "timestamp": "2024-12-21 12:20:22"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-21 12:49:03"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 12:50:06"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 13:11:22"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 13:14:40"
+        },
+        {
+            "request": "exit",
+            "timestamp": "2024-12-21 13:17:01"
         }
     ]
 }

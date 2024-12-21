@@ -21,6 +21,7 @@
 #include<string>
 #include <filesystem>
 #include "json.hpp"
+#include <set>
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
@@ -530,7 +531,7 @@ std::string getCurrentTimestamp() {
 }
 
 // Hàm lưu request vào file JSON
-void saveRequestToFile(const std::string& clientName, const std::string& request) {
+void saveRequestHistory(const std::string& clientName, const std::string& request) {
     std::ifstream inFile("requests.json");
     json requestData;
 
@@ -588,13 +589,59 @@ std::string getRequestHistory(const std::string& clientName) {
     return history;
 }
 
+// Hàm lưu `senders`
+void saveSenders(const std::set<std::string>& senders, const std::string& filename) {
+    std::ofstream outFile(filename);
+    if (outFile.is_open()) {
+        for (const auto& sender : senders) {
+            outFile << sender << "\n";
+        }
+        outFile.close();
+    }
+    else {
+        std::cerr << "Cannot open file:" << filename << std::endl;
+    }
+}
+// Hàm đọc `senders` từ file văn bản
+std::set<std::string> readSenders(const std::string& filename) {
+    std::set<std::string> senders;
+    std::ifstream inFile(filename);
+    if (inFile.is_open()) {
+        std::string sender;
+        while (std::getline(inFile, sender)) {
+            if (!sender.empty()) {
+                senders.insert(sender);
+            }
+        }
+        inFile.close();
+    }
+    else {
+        std::cerr << "Cannot open file: " << filename << std::endl;
+    }
+    return senders;
+}
+// Hàm xóa nội dung của file
+void clearSenders(const std::string& filename) {
+    std::ofstream outFile(filename, std::ios::trunc);
+    if (outFile.is_open()) {
+        outFile.close();
+    }
+    else {
+        std::cerr << "Cannot open: " << filename << std::endl;
+    }
+}
+// Hàm kiểm tra người gửi
+bool checkSender(const std::set<std::string>& senders, const std::string& sender) {
+    return senders.find(sender) != senders.end();
+}
+
 int main() {
     WSADATA wsa;
     SOCKET server_socket, new_socket;
     struct sockaddr_in server_addr, client_addr;
     int client_addr_len = sizeof(client_addr);
     char buffer[1024] = { 0 };
-    const char* response = "Command not recognized.";
+    const char* response = "Invalid request.";
 
     // 1. Khởi tạo Winsock
     std::cout << "Initializing Winsock..." << std::endl;
@@ -658,10 +705,28 @@ int main() {
             request = message.substr(delimiterPos + 2); // tách request
         }
         else {
-            std::cout << "Invalid command!" << std::endl;
+            std::cout << "Invalid request!" << std::endl;
             continue;
         }
-        saveRequestToFile(sender, request);
+        // Đọc senders từ file JSON
+        std::set<std::string> senders = readSenders("senders.txt");
+        if (!checkSender(senders, sender)) {
+            if (request == "request access") {
+				senders.insert(sender);
+				std::string response = "Access granted.";
+				send(new_socket, response.c_str(), response.size() + 1, 0);
+				std::cout << "Access granted from client.\n";
+                saveSenders(senders, "senders.txt");
+                continue;
+			}
+            else {
+                std::string response = "Access denied.";
+                send(new_socket, response.c_str(), response.size() + 1, 0);
+                std::cout << "Access denied from client.\n";
+                continue;
+            }
+        }
+        saveRequestHistory(sender, request);
 		// Gửi danh sách các lệnh có thể thực thi
         if (request == "list") {
             const char* available_commands =
@@ -687,12 +752,6 @@ int main() {
         else if (request == "exit") {
             std::cout << "Client sent exit command. Closing connection..." << std::endl;
             break;
-        }
-
-        else if (request == "request access") {
-			std::string response = "Access granted.";
-            send(new_socket, response.c_str(), response.size() + 1, 0);
-            std::cout << "Access granted from client.\n";
         }
      
         else if (request == "shutdown") {
@@ -903,14 +962,13 @@ int main() {
 
         else {
             send(new_socket, response, strlen(response), 0);
-            std::cout << "No valid request" << std::endl;
+            std::cout << "Invalid request" << std::endl;
         }
     }
-
+    clearSenders("senders.txt");
     closesocket(new_socket);
     closesocket(server_socket);
     WSACleanup();
-
     return 0;
 }
 
