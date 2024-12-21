@@ -59,6 +59,138 @@
         {
             "request": "exit",
             "timestamp": "2024-12-21 13:17:01"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-21 16:27:33"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 17:01:52"
+        },
+        {
+            "request": "request access",
+            "timestamp": "2024-12-21 18:46:35"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-21 18:51:35"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 19:13:34"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 19:19:23"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 19:29:15"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 19:46:20"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 19:51:22"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 20:15:24"
+        },
+        {
+            "request": "stop service",
+            "timestamp": "2024-12-21 20:29:45"
+        },
+        {
+            "request": "start service",
+            "timestamp": "2024-12-21 20:31:16"
+        },
+        {
+            "request": "screen capture",
+            "timestamp": "2024-12-21 20:32:51"
+        },
+        {
+            "request": "history",
+            "timestamp": "2024-12-21 20:33:48"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-21 20:34:53"
+        },
+        {
+            "request": "get file",
+            "timestamp": "2024-12-21 20:35:27"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-21 20:46:00"
+        },
+        {
+            "request": "screen capture",
+            "timestamp": "2024-12-21 20:46:39"
+        },
+        {
+            "request": "webcam capture",
+            "timestamp": "2024-12-21 20:47:35"
+        },
+        {
+            "request": "webcam record",
+            "timestamp": "2024-12-21 20:48:27"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-21 20:50:26"
+        },
+        {
+            "request": "get file",
+            "timestamp": "2024-12-21 20:51:00"
+        },
+        {
+            "request": "get file",
+            "timestamp": "2024-12-21 21:09:34"
+        },
+        {
+            "request": "delete file",
+            "timestamp": "2024-12-21 21:11:02"
+        },
+        {
+            "request": "list apps",
+            "timestamp": "2024-12-21 21:13:47"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-21 21:15:03"
+        },
+        {
+            "request": "list services",
+            "timestamp": "2024-12-21 21:15:37"
+        },
+        {
+            "request": "list apps",
+            "timestamp": "2024-12-21 21:16:12"
+        },
+        {
+            "request": "start app",
+            "timestamp": "2024-12-21 21:16:46"
+        },
+        {
+            "request": "stop app",
+            "timestamp": "2024-12-21 21:18:45"
+        },
+        {
+            "request": "start app",
+            "timestamp": "2024-12-21 21:28:54"
+        },
+        {
+            "request": "stop app",
+            "timestamp": "2024-12-21 21:30:50"
+        },
+        {
+            "request": "history",
+            "timestamp": "2024-12-21 21:32:27"
         }
     ]
 }

@@ -1,5 +1,6 @@
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
 #define _CRT_SECURE_NO_WARNINGS
+
 #include <iostream>
 #include <winsock2.h> 
 #include <fstream>    
@@ -18,7 +19,7 @@
 #include <gdiplus.h>
 #include <cstdio>
 #include <winsvc.h>
-#include<string>
+#include <string>
 #include <filesystem>
 #include "json.hpp"
 #include <set>
@@ -193,6 +194,7 @@ void TakeScreenshot(const std::string& file_path, ULONG quality = 90) {
     SaveScreenshotToJPG(wide_path, quality);
 }
 void CaptureWebcamImage(const std::string& file_path) {  
+    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
         std::cerr << "Error: Could not open webcam." << std::endl;
@@ -280,10 +282,7 @@ bool runApp(const std::vector<std::wstring>& app_list, int appIndex) {
             std::wcerr << L"cannot start the application" << L"\n";
             return false;
         }
-        else {
-            std::wcout << L"successfully  start the application:  " << L"\n";
-            return true;
-        }       
+        else return true;
     }
     return false;
 }
@@ -348,13 +347,13 @@ std::vector<std::wstring> getRunningApps(const std::vector<LPCWSTR>& appCommands
 }
 void handleStopApp(SOCKET new_socket) {
     std::vector<LPCWSTR> appCommands = getCommand();
-    std::vector<std::wstring> runningFilteredApps = getRunningApps(appCommands);
-    std::wstring response = L"List of running applications:\n";
-    for (size_t i = 0; i < runningFilteredApps.size(); ++i) {
-        response += std::to_wstring(i+1) + L". " + runningFilteredApps[i] + L"\n";
+    std::vector<std::wstring> runningApps = getRunningApps(appCommands);
+    std::string response = "List of running applications:\n";
+    for (size_t i = 0; i < runningApps.size(); ++i) {
+        response += std::to_string(i+1) + ". " + std::string(runningApps[i].begin(), runningApps[i].end()) + "\n";
     }
-    response += L"Choose app to stop:";
-    send(new_socket, (char*)response.c_str(), response.size() * sizeof(wchar_t), 0);
+    response += "Choose app to stop:";
+    send(new_socket, response.c_str(), response.size() + 1, 0);
     char buffer[10];
     int received = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
     if (received <= 0) {
@@ -363,18 +362,19 @@ void handleStopApp(SOCKET new_socket) {
     }
     buffer[received] = '\0';
     int appIndex = std::stoi(buffer);
-    if (appIndex < 0 || appIndex >= runningFilteredApps.size()) {
+    if (appIndex < 0 || appIndex >= runningApps.size()) {
         std::cerr << "Invalid app index received.\n";
         return;
     }
-    if (stopApp(runningFilteredApps[appIndex-1])) {
-        std::wstring successMsg = L"Application stopped successfully.\n";
-        send(new_socket, (char*)successMsg.c_str(), successMsg.size() * sizeof(wchar_t), 0);
+    if (stopApp(runningApps[appIndex-1])) {
+        std::string successMsg = "Application stopped successfully.\n";
+        send(new_socket, successMsg.c_str(), successMsg.size() + 1, 0);
         std::cout << "Stop app successfully.\n";
     }
     else {
-        std::wstring failureMsg = L"Failed to stop the application.\n";
-        send(new_socket, (char*)failureMsg.c_str(), failureMsg.size() * sizeof(wchar_t), 0);
+        std::string failureMsg = "Failed to stop the application.\n";
+        send(new_socket, failureMsg.c_str(), failureMsg.size() + 1, 0);
+		std::cout << "Failed to stop the application.\n";
     }
 }
 
@@ -692,10 +692,9 @@ int main() {
             std::cout << "Client disconnected." << std::endl;
             break; // Kết thúc khi client ngắt kết nối
         }
-        buffer[recv_size] = '\0';
        
         // Xử lý lệnh từ client
-        std::cout << "Message from client: " << buffer << std::endl;
+        std::cout << "Request from client: " << buffer << std::endl;
         std::string message(buffer);
         size_t delimiterPos = message.find(": ");
         std::string sender = "";
@@ -717,17 +716,28 @@ int main() {
 				send(new_socket, response.c_str(), response.size() + 1, 0);
 				std::cout << "Access granted from client.\n";
                 saveSenders(senders, "senders.txt");
-                continue;
 			}
             else {
                 std::string response = "Access denied.";
                 send(new_socket, response.c_str(), response.size() + 1, 0);
-                std::cout << "Access denied from client.\n";
-                continue;
+                std::cout << "Access denied.\n";
             }
+            continue;
+        }
+        else {
+            if (request == "request access") {
+                std::string check = "Access accepted\n";
+                send(new_socket, check.c_str(), check.size() + 1, 0);
+                std::string response = "Access have been accepted!!!";
+                send(new_socket, response.c_str(), response.size() + 1, 0);
+                std::cout << response;
+                continue;
+            }      
         }
         saveRequestHistory(sender, request);
 		// Gửi danh sách các lệnh có thể thực thi
+        std::string check = "Access accepted\n";
+		send(new_socket, check.c_str(), check.size() + 1, 0);
         if (request == "list") {
             const char* available_commands =
                 "Available commands:\n"
@@ -867,7 +877,7 @@ int main() {
 
         else if (request == "start app") {
             std::vector<std::wstring> app_list = getListApps();
-			std::string app_list_str = "Choose an app to run:\n";
+			std::string app_list_str = "List apps available:\n";
 			for (int i = 0; i < app_list.size(); ++i) {
 				app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
 			}
@@ -881,12 +891,14 @@ int main() {
 				break;
 			}			
 			int appIndex = std::stoi(appIndexBuffer);
-			bool Check = runApp(app_list, appIndex);
+			bool Check = runApp(app_list, appIndex-1);
             if (Check) {
+				std::cout << "Successfully start application\n";
                 const char* MESS = "Successfully start application ";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
             else {
+				std::cout << "Cannot start application\n";
                 const char* MESS = "Cannot start application ";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
@@ -944,10 +956,12 @@ int main() {
             int idx = std::stoi(serviceIndexBuffer);
             bool Check = startService(serviceList[idx-1].serviceName);
             if (Check) {
+				std::cout << "Stop service successfully\n";
                 const char* MESS = "Stop service successfully";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
             else {
+				std::cout << "Cannot stop service\n";
                 const char* MESS = "Cannot start service";
                 send(new_socket, MESS, strlen(MESS), 0);
             }
