@@ -216,7 +216,8 @@ private:
 		send(sock, command.c_str(), command.length(), 0);
 		std::cout << "Command has been sent to server\n";
 		if (currRequest == "exit") {
-            throw std::runtime_error("Exit requested");
+            sendEmailToOriginalSender("", currSender, "Request completed", "RE: exit");
+            throw std::runtime_error("exit");
         } 
         else {
             handleServerResponse(currRequest);
@@ -235,7 +236,7 @@ private:
 			filePath = "AccessDenied";
             sendEmailToOriginalSender(filePath, currSender, response, subject);
             return;
-        }       
+        }          
         if (response == "Access granted.") {
             filePath = "AccessGranted";
             sendEmailToOriginalSender(filePath, currSender, response, subject);
@@ -276,6 +277,7 @@ private:
             filePath = "StopService";
             handleStopService();
         }
+ 
         sendEmailToOriginalSender(filePath, currSender, "", subject);
     }
 
@@ -330,6 +332,11 @@ private:
         string subject = "RE: delete file";
         string fileIndex = processReEmail(subject);
         send(sock, fileIndex.c_str(), fileIndex.size() + 1, 0);
+        char RESULT[100];
+        int ByteReceived = recv(sock, RESULT, 100, 0);
+        if (ByteReceived > 0) {
+            std::cout << RESULT << std::endl;
+        }
     }
 
     void handleStartApp() {
@@ -621,11 +628,13 @@ public:
             if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout)) < 0) {
                 std::cerr << "Warning: Failed to set receive timeout" << std::endl;
             }
-
+			cout << "Enter server IP: ";
+            string serverIP;
+			cin >> serverIP;
             sockaddr_in server_addr{};
             server_addr.sin_family = AF_INET;
             server_addr.sin_port = htons(PORT);
-            inet_pton(AF_INET, "127.0.0.1"/*"192.168.30.129"*/, &server_addr.sin_addr);
+            inet_pton(AF_INET, serverIP.c_str(), &server_addr.sin_addr);
 
             std::cout << "Attempting to connect to server..." << std::endl;
             if (connect(sock, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr)) < 0) {
@@ -648,7 +657,7 @@ public:
                 std::this_thread::sleep_for(std::chrono::seconds(10));
             }
             catch (const std::runtime_error& e) {
-                if (std::string(e.what()) == "Shutdown requested") {
+                if (std::string(e.what()) == "exit") {
                     break;
                 }
                 std::cerr << "Error: " << e.what() << std::endl;

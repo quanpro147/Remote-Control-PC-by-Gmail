@@ -191,6 +191,90 @@
         {
             "request": "history",
             "timestamp": "2024-12-21 21:32:27"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 10:32:18"
+        },
+        {
+            "request": "delete file",
+            "timestamp": "2024-12-22 10:33:04"
+        },
+        {
+            "request": "list file",
+            "timestamp": "2024-12-22 10:34:10"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 10:35:38"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 10:39:11"
+        },
+        {
+            "request": "delete file",
+            "timestamp": "2024-12-22 10:49:10"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 10:50:29"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 14:05:35"
+        },
+        {
+            "request": "delete file",
+            "timestamp": "2024-12-22 14:06:28"
+        },
+        {
+            "request": "list file",
+            "timestamp": "2024-12-22 14:07:36"
+        },
+        {
+            "request": "list fi",
+            "timestamp": "2024-12-22 14:09:57"
+        },
+        {
+            "request": "list f",
+            "timestamp": "2024-12-22 14:12:53"
+        },
+        {
+            "request": "l?",
+            "timestamp": "2024-12-22 14:19:01"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 14:29:43"
+        },
+        {
+            "request": "delete file",
+            "timestamp": "2024-12-22 14:30:20"
+        },
+        {
+            "request": "list files",
+            "timestamp": "2024-12-22 14:32:33"
+        },
+        {
+            "request": "get file",
+            "timestamp": "2024-12-22 14:33:18"
+        },
+        {
+            "request": "exit",
+            "timestamp": "2024-12-22 14:44:58"
+        },
+        {
+            "request": "exit",
+            "timestamp": "2024-12-22 14:49:51"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-22 21:43:43"
+        },
+        {
+            "request": "list",
+            "timestamp": "2024-12-22 21:52:34"
         }
     ]
 }

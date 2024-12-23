@@ -23,7 +23,7 @@
 #include <filesystem>
 #include "json.hpp"
 #include <set>
-
+#include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "Advapi32.lib")
@@ -46,7 +46,42 @@ void sendData(SOCKET new_socket, const std::string& data) {
 }
 // Các hàm chức năng
 // Hàm tắt máy
+void EnableShutdownPrivilege() {
+    HANDLE hToken;
+    TOKEN_PRIVILEGES tkp;
+
+    // Lấy token của tiến trình hiện tại
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken)) {
+        std::cout << "Failed to open process token. Error: " << GetLastError() << std::endl;
+        return;
+    }
+
+    // Lấy LUID cho đặc quyền SE_SHUTDOWN_NAME
+    if (!LookupPrivilegeValue(NULL, SE_SHUTDOWN_NAME, &tkp.Privileges[0].Luid)) {
+        std::cout << "Failed to lookup privilege. Error: " << GetLastError() << std::endl;
+        CloseHandle(hToken);
+        return;
+    }
+
+    tkp.PrivilegeCount = 1;  // Số lượng đặc quyền
+    tkp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+
+    // Điều chỉnh quyền cho token
+    if (!AdjustTokenPrivileges(hToken, FALSE, &tkp, 0, NULL, NULL)) {
+        std::cout << "Failed to adjust token privileges. Error: " << GetLastError() << std::endl;
+        CloseHandle(hToken);
+        return;
+    }
+
+    if (GetLastError() == ERROR_NOT_ALL_ASSIGNED) {
+        std::cout << "The token does not have the specified privilege." << std::endl;
+    }
+
+    CloseHandle(hToken);
+}
 void ShutdownSystem() {
+    EnableShutdownPrivilege();  // Bật quyền tắt máy
+
     if (!ExitWindowsEx(EWX_SHUTDOWN | EWX_FORCE, SHTDN_REASON_MAJOR_OTHER)) {
         std::cout << "Shutdown failed. Error: " << GetLastError() << std::endl;
     }
@@ -210,14 +245,25 @@ void CaptureWebcamImage(const std::string& file_path) {
     cap.release();
 }
 
- //Hàm quay video webcam
 bool recordVideo(const std::string& output_file, int duration_in_seconds) {
-    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
+    //cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
+
     cv::VideoCapture cap(0);
+    if (!cap.isOpened()) {
+        std::cout << "Error: Cannot open webcam" << std::endl;
+        return false;
+    }
 
     int frame_width = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
     int frame_height = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
     int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
+    if (fps <= 0) fps = 30; // Giá trị mặc định nếu FPS không hợp lệ
+
+    if (frame_width <= 0 || frame_height <= 0) {
+        std::cout << "Error: Invalid frame dimensions" << std::endl;
+        return false;
+    }
+
     cv::VideoWriter video(output_file,
         cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
         fps,
@@ -354,18 +400,20 @@ void handleStopApp(SOCKET new_socket) {
     }
     response += "Choose app to stop:";
     send(new_socket, response.c_str(), response.size() + 1, 0);
+    std::cout << "Waiting app index from client...\n";
     char buffer[10];
     int received = recv(new_socket, buffer, sizeof(buffer) - 1, 0);
     if (received <= 0) {
         std::cerr << "Failed to receive index from client.\n";
         return;
-    }
+    }  
     buffer[received] = '\0';
     int appIndex = std::stoi(buffer);
     if (appIndex < 0 || appIndex >= runningApps.size()) {
         std::cerr << "Invalid app index received.\n";
         return;
     }
+    else std::cout << "User response: " << appIndex << "\n";
     if (stopApp(runningApps[appIndex-1])) {
         std::string successMsg = "Application stopped successfully.\n";
         send(new_socket, successMsg.c_str(), successMsg.size() + 1, 0);
@@ -486,7 +534,7 @@ bool startService(const std::wstring& serviceName) {
 }
 
 // Hàm tăt dịch vụ
-bool handleStopService(const std::wstring& serviceName) {
+bool stopService(const std::wstring& serviceName) {
 
     SC_HANDLE hSCManager = OpenSCManager(NULL, NULL, SC_MANAGER_ALL_ACCESS);
     if (!hSCManager) {
@@ -640,6 +688,7 @@ int main() {
     SOCKET server_socket, new_socket;
     struct sockaddr_in server_addr, client_addr;
     int client_addr_len = sizeof(client_addr);
+    char client_ip[INET_ADDRSTRLEN];
     char buffer[1024] = { 0 };
     const char* response = "Invalid request.";
 
@@ -668,321 +717,337 @@ int main() {
         return 1;
     }
     std::cout << "Bind done." << std::endl;
-
-    // 5. Lắng nghe kết nối
-    listen(server_socket, 3);
-    std::cout << "Waiting for incoming connections..." << std::endl;
-
-    // 6. Chấp nhận kết nối
-    if ((new_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_addr_len)) == INVALID_SOCKET) {
-        std::cout << "Accept failed: " << WSAGetLastError() << std::endl;
-        return 1;
-    }
-    std::cout << "Connection accepted." << std::endl;
-
-    // 7. Xử lý lệnh từ client
-    while (true) {
-        memset(buffer, 0, sizeof(buffer));
-        int recv_size = recv(new_socket, buffer, 1024, 0);
-        if (recv_size == SOCKET_ERROR) {
-            std::cout << "Recv failed: " << WSAGetLastError() << std::endl;
-            break;
+    bool limit = false;
+    while (true) {      
+        // 5. Lắng nghe kết nối
+        if (!limit) std::cout << "Waiting for incoming connections..." << std::endl;
+        listen(server_socket, 3);
+        // 6. Chấp nhận kết nối
+        if ((new_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_addr_len)) == INVALID_SOCKET) {
+            std::cout << "Accept failed: " << WSAGetLastError() << std::endl;
+            return 1;
         }
-        else if (recv_size == 0) {
-            std::cout << "Client disconnected." << std::endl;
-            break; // Kết thúc khi client ngắt kết nối
-        }
-       
-        // Xử lý lệnh từ client
-        std::cout << "Request from client: " << buffer << std::endl;
-        std::string message(buffer);
-        size_t delimiterPos = message.find(": ");
-        std::string sender = "";
-        std::string request = "";
-        if (delimiterPos != std::string::npos) {
-            sender = message.substr(0, delimiterPos); // tách sender
-            request = message.substr(delimiterPos + 2); // tách request
+        if (inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN) == NULL) {
+            std::cout << "inet_ntop failed: " << WSAGetLastError() << std::endl;
         }
         else {
-            std::cout << "Invalid request!" << std::endl;
-            continue;
+            std::cout << "Connection accepted from IP: " << client_ip << std::endl;
         }
-        // Đọc senders từ file JSON
-        std::set<std::string> senders = readSenders("senders.txt");
-        if (!checkSender(senders, sender)) {
-            if (request == "request access") {
-				senders.insert(sender);
-				std::string response = "Access granted.";
-				send(new_socket, response.c_str(), response.size() + 1, 0);
-				std::cout << "Access granted from client.\n";
-                saveSenders(senders, "senders.txt");
-			}
-            else {
-                std::string response = "Access denied.";
-                send(new_socket, response.c_str(), response.size() + 1, 0);
-                std::cout << "Access denied.\n";
+        limit = true;
+        // 7. Xử lý lệnh từ client
+        while (true) {
+            memset(buffer, 0, sizeof(buffer));
+            int recv_size = recv(new_socket, buffer, 1024, 0);
+            if (recv_size == SOCKET_ERROR) {
+                std::cout << "Recv failed: " << WSAGetLastError() << std::endl;
+                break;
             }
-            continue;
-        }
-        else {
-            if (request == "request access") {
-                std::string check = "Access accepted\n";
-                send(new_socket, check.c_str(), check.size() + 1, 0);
-                std::string response = "Access have been accepted!!!";
-                send(new_socket, response.c_str(), response.size() + 1, 0);
-                std::cout << response;
+            else if (recv_size == 0) {
+                std::cout << "Client disconnected." << std::endl;
+                break; // Kết thúc khi client ngắt kết nối
+            }
+
+            // Xử lý lệnh từ client
+            std::cout << "Request from client: " << buffer << std::endl;
+            std::string message(buffer);
+            size_t delimiterPos = message.find(": ");
+            std::string sender = "";
+            std::string request = "";
+            if (delimiterPos != std::string::npos) {
+                sender = message.substr(0, delimiterPos); // tách sender
+                request = message.substr(delimiterPos + 2); // tách request
+            }
+            else {
+                std::cout << "Cannot recognize request!" << std::endl;
                 continue;
-            }      
-        }
-        saveRequestHistory(sender, request);
-		// Gửi danh sách các lệnh có thể thực thi
-        std::string check = "Access accepted\n";
-		send(new_socket, check.c_str(), check.size() + 1, 0);
-        if (request == "list") {
-            const char* available_commands =
-                "Available commands:\n"
-                "1. shutdown\n"
-                "2. screen capture\n"
-                "3. webcam capture\n"
-                "4. webcam record\n"
-                "5. list files\n"
-                "6. get file\n"
-                "7. delete file\n"
-                "8. list apps\n"
-                "9. start app\n"
-                "10. stop app\n"
-                "11. list services\n"
-                "12. start service\n"
-                "13. stop service\n"
-                "14. history\n";
-            send(new_socket, available_commands, strlen(available_commands), 0);
-            std::cout << "Sent list of available commands to client." << std::endl;
-        }
+            }
+            // Đọc senders từ file JSON
+            std::set<std::string> senders = readSenders("C:\\Users\\Virtual PC\\Downloads\\Socket_Gmail\\senders.txt");
+            if (!checkSender(senders, sender)) {
+                if (request == "request access") {
+                    senders.insert(sender);
+                    std::string response = "Access granted.";
+                    send(new_socket, response.c_str(), response.size() + 1, 0);
+                    std::cout << "Access granted.\n";
+                    saveSenders(senders, "senders.txt");
+                }
+                else {
+                    std::string response = "Access denied.";
+                    send(new_socket, response.c_str(), response.size() + 1, 0);
+                    std::cout << "Access denied.\n";
+                }
+                continue;
+            }
+            else {
+                if (request == "request access") {
+                    std::string check = "Access accepted";
+                    send(new_socket, check.c_str(), check.size() + 1, 0);
+                    std::string response = "Access have been accepted!!!";
+                    send(new_socket, response.c_str(), response.size() + 1, 0);
+                    std::cout << response << "\n";
+                    continue;
+                }
+            }
+            saveRequestHistory(sender, request);
+            // Gửi danh sách các lệnh có thể thực thi
+            std::string check = "Access accepted";
+            send(new_socket, check.c_str(), check.size() + 1, 0);
+            Sleep(1000);
+            if (request == "list") {
+                const char* available_commands =
+                    "Available commands:\n"
+                    "1. shutdown\n"
+                    "2. screen capture\n"
+                    "3. webcam capture\n"
+                    "4. webcam record\n"
+                    "5. list files\n"
+                    "6. get file\n"
+                    "7. delete file\n"
+                    "8. list apps\n"
+                    "9. start app\n"
+                    "10. stop app\n"
+                    "11. list services\n"
+                    "12. start service\n"
+                    "13. stop service\n"
+                    "14. history\n"
+                    "15. exit\n";
+                send(new_socket, available_commands, strlen(available_commands), 0);
+                std::cout << "Sent list of available commands to client." << std::endl;
+            }
 
-        else if (request == "exit") {
-            std::cout << "Client sent exit command. Closing connection..." << std::endl;
-            break;
-        }
-     
-        else if (request == "shutdown") {
-            std::cout << "Shutdown command received, shutting down..." << std::endl;
-            ShutdownSystem();
-        }
-	
-        else if (request == "screen capture") {
-            TakeScreenshot("screenshot.bmp");       
-			handleSendFile("screenshot.bmp", new_socket);
-        }
-
-		else if (request == "webcam capture") {
-			CaptureWebcamImage("webcam_image.jpg");
-			handleSendFile("webcam_image.jpg", new_socket);
-		}
-
-        else if (request == "webcam record") {
-            std::string prompt = "Enter the number of seconds to record: ";
-            send(new_socket, prompt.c_str(), prompt.size() + 1, 0);        
-       
-            std::cout << "Waiting duration from client...\n";
-            char timeBuffer[10];
-            int time_received = recv(new_socket, timeBuffer, sizeof(timeBuffer), 0);
-            if (time_received <= 0) {
-                std::cout << "Failed to receive duration from client." << std::endl;
+            else if (request == "exit") {
+                std::cout << "Client sent exit command. Closing connection..." << std::endl;
                 break;
             }
-            timeBuffer[time_received] = '\0';
-            int duration = std::stoi(timeBuffer);
 
-            recordVideo("webcam_video.avi", duration);
-			std::string response = "ok";
-            send(new_socket, "ok", response.size() + 1, 0);
-            handleSendFile("webcam_video.avi", new_socket);
-        }
-
-        else if (request == "list files") {
-            std::vector<std::string> fileList = getFileList();
-            if (fileList.empty()) {
-                const char* MESS = "No files available.";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
-            std::string fileListMessage = "Available files:\n";
-            for (size_t i = 0; i < fileList.size(); ++i) {
-                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
-            }
-            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
-			std::cout << "Sent list of files to client.\n";
-        }
-
-        else if (request == "get file") {
-            std::vector<std::string> fileList = getFileList();
-            if (fileList.empty()) {
-                const char* MESS = "No files available to get.";
-                send(new_socket, MESS, strlen(MESS), 0);               
-            }
-            std::string fileListMessage = "Available files:\n";
-            for (size_t i = 0; i < fileList.size(); ++i) {
-                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
-            }
-            fileListMessage += "Enter file index you want to get: ";
-            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
-			recv(new_socket, buffer, BUFFER_SIZE, 0);
-			int fileIndex = atoi(buffer) - 1;
-			send(new_socket, fileList[fileIndex].c_str(), fileList[fileIndex].size() + 1, 0);
-			std::string filePath = "./list file/" + fileList[fileIndex];
-			handleSendFile(filePath, new_socket);
-            
-        }
-
-        else if (request == "delete file") {
-            std::vector<std::string> fileList = getFileList();
-            if (fileList.empty()) {
-                const char* MESS = "No files available to delete.";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }   
-            std::string fileListMessage = "Available files:\n";
-            for (size_t i = 0; i < fileList.size(); ++i) {
-                fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
-            }
-            fileListMessage += "Enter the file index to delete: ";
-            send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
-            recv(new_socket, buffer, BUFFER_SIZE, 0);
-            int fileIndex = atoi(buffer) - 1;
-            if (fileIndex < 0 || fileIndex >= static_cast<int>(fileList.size())) {
-                const char* MESS = "Invalid file number.";
-                send(new_socket, MESS, strlen(MESS), 0);           
-            }
-            else if (handleDeleteFile(fileList[fileIndex].c_str())) {
-				std::cout << "File deleted successfully." << std::endl;
-                const char* MESS = "File deleted successfully.";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
-            else {
-				std::cout << "Failed to delete file." << std::endl;
-                const char* MESS = "Failed to delete file.";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
-        }
-
-        else if (request == "list apps") {    
-            std::vector<std::wstring> app_list = getListApps();
-            std::string app_list_str = "Installed applications:\n";
-            std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-            for (const std::wstring& app : app_list) {
-                std::string app_str = converter.to_bytes(app);
-                app_list_str += app_str + "\n";
-            }
-			sendData(new_socket, app_list_str);
-			std::cout << "Sent list of installed apps to client." << std::endl;
-        }
-
-        else if (request == "start app") {
-            std::vector<std::wstring> app_list = getListApps();
-			std::string app_list_str = "List apps available:\n";
-			for (int i = 0; i < app_list.size(); ++i) {
-				app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";              
-			}
-            app_list_str += "Choose app to run:\n";
-			send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
-            std::cout << "Waiting app index from client...\n";
-			char appIndexBuffer[10];
-			int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
-			if (appIndexReceived <= 0) {
-				std::cout << "Failed to receive app index from client." << std::endl;
-				break;
-			}			
-			int appIndex = std::stoi(appIndexBuffer);
-			bool Check = runApp(app_list, appIndex-1);
-            if (Check) {
-				std::cout << "Successfully start application\n";
-                const char* MESS = "Successfully start application ";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
-            else {
-				std::cout << "Cannot start application\n";
-                const char* MESS = "Cannot start application ";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
-        }
-
-        else if (request == "stop app") {
-            handleStopApp(new_socket);
-        }
-
-        else if (request == "list services") {
-            std::vector<ServiceInfo> serviceList = getServiceList();
-			std::string serviceList_str = getServiceListStr(serviceList);
-            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
-            std::cout << "Sent list of services to client." << std::endl;
+            else if (request == "shutdown") {
+                std::cout << "Shutdown command received, shutting down..." << std::endl;
+                ShutdownSystem();
             }
 
-        else if (request == "start service") {
-            std::vector<ServiceInfo> serviceList = getServiceList();
-			std::string serviceList_str = getServiceListStr(serviceList);
-			serviceList_str += "Choose service to start:";
-            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
-            std::cout << "Waiting service index from client...\n";
-            char serviceIndexBuffer[10];
-            int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
-            if (serviceIndex<= 0) {
-                std::cout << "Failed to receive app index from client." << std::endl;
+            else if (request == "screen capture") {
+                TakeScreenshot("screenshot.bmp");
+                handleSendFile("screenshot.bmp", new_socket);
+            }
+
+            else if (request == "webcam capture") {
+                CaptureWebcamImage("webcam_image.jpg");
+                handleSendFile("webcam_image.jpg", new_socket);
+            }
+
+            else if (request == "webcam record") {
+                std::string prompt = "Enter the number of seconds to record: ";
+                send(new_socket, prompt.c_str(), prompt.size() + 1, 0);
+
+                std::cout << "Waiting duration from client...\n";
+                char timeBuffer[10];
+                int time_received = recv(new_socket, timeBuffer, sizeof(timeBuffer), 0);
+                if (time_received <= 0) {
+                    std::cout << "Failed to receive duration from client." << std::endl;
+                    break;
+                }
+                timeBuffer[time_received] = '\0';
+                int duration = std::stoi(timeBuffer);
+
+                recordVideo("webcam_video.avi", duration);
+                std::string response = "ok";
+                send(new_socket, "ok", response.size() + 1, 0);
+                handleSendFile("webcam_video.avi", new_socket);
+            }
+
+            else if (request == "list files") {
+                std::vector<std::string> fileList = getFileList();
+                if (fileList.empty()) {
+                    const char* MESS = "No files available.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                std::string fileListMessage = "Available files:\n";
+                for (size_t i = 0; i < fileList.size(); ++i) {
+                    fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+                }
+                send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+                std::cout << "Sent list of files to client.\n";
+            }
+
+            else if (request == "get file") {
+                std::vector<std::string> fileList = getFileList();
+                if (fileList.empty()) {
+                    const char* MESS = "No files available to get.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                std::string fileListMessage = "Available files:\n";
+                for (size_t i = 0; i < fileList.size(); ++i) {
+                    fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+                }
+                fileListMessage += "Enter file index you want to get: ";
+                send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+                recv(new_socket, buffer, BUFFER_SIZE, 0);
+                int fileIndex = atoi(buffer) - 1;
+                send(new_socket, fileList[fileIndex].c_str(), fileList[fileIndex].size() + 1, 0);
+                std::string filePath = "./list file/" + fileList[fileIndex];
+                handleSendFile(filePath, new_socket);
+
+            }
+
+            else if (request == "delete file") {
+                std::vector<std::string> fileList = getFileList();
+                if (fileList.empty()) {
+                    const char* MESS = "No files available to delete.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                std::string fileListMessage = "Available files:\n";
+                for (size_t i = 0; i < fileList.size(); ++i) {
+                    fileListMessage += std::to_string(i + 1) + ". " + fileList[i] + "\n";
+                }
+                fileListMessage += "Enter the file index to delete: ";
+                send(new_socket, fileListMessage.c_str(), fileListMessage.size() + 1, 0);
+                recv(new_socket, buffer, BUFFER_SIZE, 0);
+                int fileIndex = atoi(buffer) - 1;
+                if (fileIndex < 0 || fileIndex >= static_cast<int>(fileList.size())) {
+                    const char* MESS = "Invalid file number.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                else if (handleDeleteFile(fileList[fileIndex].c_str())) {
+                    std::cout << "File deleted successfully." << std::endl;
+                    const char* MESS = "File deleted successfully.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                else {
+                    std::cout << "Failed to delete file." << std::endl;
+                    const char* MESS = "Failed to delete file.";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+            }
+
+            else if (request == "list apps") {
+                std::vector<std::wstring> app_list = getListApps();
+                std::string app_list_str = "Installed applications:\n";
+                std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+                for (const std::wstring& app : app_list) {
+                    std::string app_str = converter.to_bytes(app);
+                    app_list_str += app_str + "\n";
+                }
+                sendData(new_socket, app_list_str);
+                std::cout << "Sent list of installed apps to client." << std::endl;
+            }
+
+            else if (request == "start app") {
+                std::vector<std::wstring> app_list = getListApps();
+                std::string app_list_str = "List apps available:\n";
+                for (int i = 0; i < app_list.size(); ++i) {
+                    app_list_str += std::string(app_list[i].begin(), app_list[i].end()) + "\n";
+                }
+                app_list_str += "Choose app to run:\n";
+                send(new_socket, app_list_str.c_str(), app_list_str.size() + 1, 0);
+                std::cout << "Waiting app index from client...\n";
+                char appIndexBuffer[10];
+                int appIndexReceived = recv(new_socket, appIndexBuffer, sizeof(appIndexBuffer), 0);
+                if (appIndexReceived <= 0) {
+                    std::cout << "Failed to receive app index from client." << std::endl;
+                    break;
+                }
+                else std::cout << "User response: " << appIndexBuffer << "\n";
+                int appIndex = std::stoi(appIndexBuffer);
+                bool Check = runApp(app_list, appIndex - 1);
+                if (Check) {
+                    std::cout << "Successfully start application\n";
+                    const char* MESS = "Successfully start application ";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                else {
+                    std::cout << "Cannot start application\n";
+                    const char* MESS = "Cannot start application ";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+            }
+
+            else if (request == "stop app") {
+                handleStopApp(new_socket);
+            }
+
+            else if (request == "list services") {
+                std::vector<ServiceInfo> serviceList = getServiceList();
+                std::string serviceList_str = getServiceListStr(serviceList);
+                send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+                std::cout << "Sent list of services to client." << std::endl;
+            }
+
+            else if (request == "start service") {
+                std::vector<ServiceInfo> serviceList = getServiceList();
+                std::string serviceList_str = getServiceListStr(serviceList);
+                serviceList_str += "Choose service to start:";
+                send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+                std::cout << "Waiting service index from client...\n";
+                char serviceIndexBuffer[10];
+                int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
+                if (serviceIndex <= 0) {
+                    std::cout << "Failed to receive app index from client." << std::endl;
+                    break;
+                }
+                else std::cout << "User response: " << serviceIndexBuffer << "\n";
+                int idx = std::stoi(serviceIndexBuffer);
+                bool Check = startService(serviceList[idx - 1].serviceName);
+                if (Check) {
+                    std::cout << "Start service successfully\n";
+                    std::string MESS = "Start service successfully";
+                    send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
+                }
+                else {
+                    std::cout << "Cannot start service\n";
+                    std::string MESS = "Cannot start service";
+                    send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
+                }
+            }
+
+            else if (request == "stop service") {
+                std::vector<ServiceInfo> serviceList = getServiceList();
+                std::string serviceList_str = getServiceListStr(serviceList);
+                serviceList_str += "Choose service to stop:";
+                send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
+                std::cout << "Waiting service index from client...\n";
+                char serviceIndexBuffer[10];            
+                int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
+                if (serviceIndex <= 0) {
+                    std::cout << "Failed to receive app index from client." << std::endl;
+                    break;
+                }              
+                else std::cout << "User response: " << serviceIndexBuffer << "\n";
+                int idx = std::stoi(serviceIndexBuffer);
+                bool Check = stopService(serviceList[idx - 1].serviceName);
+                if (Check) {
+                    std::cout << "Stop service successfully\n";
+                    const char* MESS = "Stop service successfully";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+                else {
+                    std::cout << "Cannot stop service\n";
+                    const char* MESS = "Cannot start service";
+                    send(new_socket, MESS, strlen(MESS), 0);
+                }
+            }
+
+            else if (request == "history") {
+                std::string response = "Your request history:\n";
+                response += getRequestHistory(sender);
+                send(new_socket, response.c_str(), response.size() + 1, 0);
+                std::cout << "Sent request history to client.\n";
+            }
+
+            else if (request == "exit") {
+				std::cout << "Client sent exit command. Closing connection..." << std::endl;              
                 break;
-            }          
-            int idx = std::stoi(serviceIndexBuffer);
-            bool Check = startService(serviceList[idx-1].serviceName);
-            if (Check) {
-				std::cout << "Start service successfully\n";
-                std::string MESS = "Start service successfully";
-                send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
             }
-            else {
-				std::cout << "Cannot start service\n";
-                std::string MESS = "Cannot start service";
-                send(new_socket, MESS.c_str(), MESS.size() + 1, 0);
-            }         
-        }
 
-        else if (request == "stop service") {
-            std::vector<ServiceInfo> serviceList = getServiceList();
-			std::string serviceList_str = getServiceListStr(serviceList);
-            serviceList_str = "Choose service to stop:";
-            send(new_socket, serviceList_str.c_str(), serviceList_str.size() + 1, 0);
-            std::cout << "Waiting service index from client...\n";
-            char serviceIndexBuffer[10];
-            int serviceIndex = recv(new_socket, serviceIndexBuffer, sizeof(serviceIndexBuffer), 0);
-            if (serviceIndex <= 0) {
-                std::cout << "Failed to receive app index from client." << std::endl;
-                break;
-            }
-            int idx = std::stoi(serviceIndexBuffer);
-            bool Check = startService(serviceList[idx-1].serviceName);
-            if (Check) {
-				std::cout << "Stop service successfully\n";
-                const char* MESS = "Stop service successfully";
-                send(new_socket, MESS, strlen(MESS), 0);
-            }
             else {
-				std::cout << "Cannot stop service\n";
-                const char* MESS = "Cannot start service";
-                send(new_socket, MESS, strlen(MESS), 0);
+                send(new_socket, response, strlen(response), 0);
+                std::cout << "Invalid request" << std::endl;
             }
         }
-        
-        else if (request == "history") {
-            std::string response = "Your request history:\n";
-			response += getRequestHistory(sender);
-			send(new_socket, response.c_str(), response.size() + 1, 0);
-			std::cout << "Sent request history to client.\n";
-        }
-
-        else {
-            send(new_socket, response, strlen(response), 0);
-            std::cout << "Invalid request" << std::endl;
-        }
+        limit = false;
+        closesocket(new_socket);
+        clearSenders("C:\\Users\\Virtual PC\\Downloads\\Socket_Gmail\\senders.txt");
     }
-    clearSenders("senders.txt");
-    closesocket(new_socket);
     closesocket(server_socket);
     WSACleanup();
     return 0;
 }
-
