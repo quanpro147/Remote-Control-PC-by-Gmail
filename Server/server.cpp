@@ -302,6 +302,36 @@ bool recordVideo(const std::string& output_file, int duration_in_seconds) {
 }
 
 // Hàm lấy danh sách ứng dụng
+struct ProcessInfo {
+    DWORD processID;
+    std::wstring exeName;
+};
+std::vector<ProcessInfo> GetProcessList() {
+    HANDLE hProcessSnap;
+    PROCESSENTRY32 pe32;
+    std::vector<ProcessInfo> processList;
+
+
+    hProcessSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hProcessSnap == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to take a snapshot of processes." << std::endl;
+        return processList;
+    }
+    pe32.dwSize = sizeof(PROCESSENTRY32);
+    if (!Process32First(hProcessSnap, &pe32)) {
+        std::cerr << "Failed to get the first process." << std::endl;
+        CloseHandle(hProcessSnap);
+        return processList;
+    }
+    do {
+        ProcessInfo pInfo;
+        pInfo.processID = pe32.th32ProcessID;
+        pInfo.exeName = pe32.szExeFile;
+        processList.push_back(pInfo);
+    } while (Process32Next(hProcessSnap, &pe32));
+    CloseHandle(hProcessSnap);
+    return processList;
+}
 std::vector<std::wstring> getListApps() {
     std::vector<std::wstring> app_list = { L"1. Chrome",L"2. Word",L"3. Excel",L"4. Edge",L"5. Paint",L"6. Explorer",L"7. Notepad",
                                             L"8. Calculator",L"9. Snipping tool",L"10. Power Point",L"11. Camera" };
@@ -762,7 +792,7 @@ int main() {
                 continue;
             }
             // Đọc senders từ file JSON
-            std::set<std::string> senders = readSenders("C:\\Users\\Virtual PC\\Downloads\\Socket_Gmail\\senders.txt");
+            std::set<std::string> senders = readSenders("senders.txt");
             if (!checkSender(senders, sender)) {
                 if (request == "request access") {
                     senders.insert(sender);
@@ -920,15 +950,15 @@ int main() {
             }
 
             else if (request == "list apps") {
-                std::vector<std::wstring> app_list = getListApps();
-                std::string app_list_str = "Installed applications:\n";
+                std::vector<ProcessInfo> app_list = GetProcessList();
+                std::string app_list_str = "List apps:\n";
                 std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
-                for (const std::wstring& app : app_list) {
-                    std::string app_str = converter.to_bytes(app);
-                    app_list_str += app_str + "\n";
+                for (const ProcessInfo& app : app_list) {                 
+                    std::string app_str = converter.to_bytes(app.exeName);
+                    app_list_str += app_str + "\n";                                     
                 }
                 sendData(new_socket, app_list_str);
-                std::cout << "Sent list of installed apps to client." << std::endl;
+                std::cout << "Sent list of apps to client." << std::endl;
             }
 
             else if (request == "start app") {
@@ -1045,7 +1075,7 @@ int main() {
         }
         limit = false;
         closesocket(new_socket);
-        clearSenders("C:\\Users\\Virtual PC\\Downloads\\Socket_Gmail\\senders.txt");
+        clearSenders("senders.txt");
     }
     closesocket(server_socket);
     WSACleanup();
